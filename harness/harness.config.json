@@ -1,0 +1,7 @@
+{
+  "static": "ruff check . && ruff format --check .",
+  "unit": "pytest tests/ -x -q",
+  "unit_count_pattern": "\\d+ passed",
+  "required_checks": "none",
+  "protected_paths": "MISSION.md,FACTORY.md,FACTORY_RULES.md,PRD.md,harness/**,.factory/**,factory/**,engineering.md"
+}
