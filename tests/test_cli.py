@@ -40,3 +40,13 @@ def test_recommend_for_unknown_user_exits_nonzero(tmp_path):
 
     assert result.returncode == 1
     assert "unknown user" in result.stderr
+
+
+def test_recommend_against_missing_db_reports_it_and_creates_nothing(tmp_path):
+    db = tmp_path / "missing.db"
+
+    result = run_cli("recommend", "--db", str(db), "--user", "alice", "--top", "3")
+
+    assert result.returncode == 1
+    assert "database not found" in result.stderr
+    assert not db.exists()

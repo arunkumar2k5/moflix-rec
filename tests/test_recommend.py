@@ -3,7 +3,9 @@ import socket
 import numpy as np
 import pytest
 
-from app.recommend import RecommendError, rank, recommend
+from app.db import connect, insert_movie, store_vector
+from app.recommend import RecommendError, base_taste_vector, rank, recommend
+from app.vectors import DIMENSION, VECTOR_VERSION, Movie
 
 
 def test_recommend_never_returns_a_watched_movie(seeded_db, library):
@@ -14,6 +16,44 @@ def test_recommend_never_returns_a_watched_movie(seeded_db, library):
         assert returned
         assert returned.isdisjoint(user["watched"])
         assert len(returned) == len(library["movies"]) - len(user["watched"])
+
+
+def test_base_taste_vector_is_the_unweighted_mean():
+    np.testing.assert_allclose(base_taste_vector(np.array([[1.0, 0.0], [3.0, 2.0]])), [2.0, 1.0])
+
+
+def _padded(*values: float) -> np.ndarray:
+    vector = np.zeros(DIMENSION)
+    vector[: len(values)] = values
+    return vector
+
+
+def test_recommend_scores_unwatched_movies_against_the_mean_of_watched_vectors():
+    vectors = {
+        1: _padded(1.0, 0.0, 0.0),
+        2: _padded(3.0, 2.0, 0.0),
+        3: _padded(0.0, 1.0, 0.0),  # taste (2, 1, 0) . v = 1
+        4: _padded(1.0, 0.0, 1.0),  # 2
+        5: _padded(0.0, 0.0, 5.0),  # 0
+    }
+    conn = connect(":memory:")
+    for movie_id, vector in vectors.items():
+        movie = Movie(movie_id, f"Movie {movie_id}", 2000, (), 100, "en", "US", "PG", 7.0, "", ())
+        insert_movie(conn, movie)
+        store_vector(conn, movie_id, VECTOR_VERSION, vector)
+    user_id = conn.execute("INSERT INTO users (name) VALUES ('dana')").lastrowid
+    conn.executemany(
+        "INSERT INTO watch_events (user_id, movie_id) VALUES (?, ?)", [(user_id, 1), (user_id, 2)]
+    )
+
+    results = recommend(conn, "dana", top_n=3)
+
+    assert [(r.movie_id, r.title) for r in results] == [
+        (4, "Movie 4"),
+        (3, "Movie 3"),
+        (5, "Movie 5"),
+    ]
+    np.testing.assert_allclose([r.score for r in results], [2.0, 1.0, 0.0], atol=1e-6)
 
 
 def test_rank_scores_are_dot_products_in_descending_order():

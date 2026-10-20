@@ -2,6 +2,7 @@
 
 import argparse
 import sys
+from pathlib import Path
 
 from app.db import connect
 from app.recommend import RecommendError, recommend
@@ -32,6 +33,9 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.command == "recommend" and not Path(args.db).is_file():
+        print(f"error: database not found: {args.db}", file=sys.stderr)
+        return 1
     conn = connect(args.db)
     try:
         if args.command == "seed":
