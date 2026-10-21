@@ -89,7 +89,7 @@ they'll score low but won't break anything.
 
 **Important notes on the CSV export:**
 - Files have UTF-8 BOM — code uses `encoding='utf-8-sig'` to strip it
-- `LastPlayed`/`FirstPlayed` export with time only (no date) — this is a plugin display bug; recency decay is not implemented yet (Issue #2 will add this using `PlayCount` as a proxy)
+- `LastPlayed`/`FirstPlayed` export with time only (no date) — this is a plugin display bug; sync leaves `watch_events.watched_at` NULL, so recency decay does not apply until a dated source exists. `PlayCount` feeds `play_count`, and `TotalMinutesWatched` over runtime feeds `completion`
 - `LongestPlayMinutes` approximates movie runtime for movies not found on TMDB
 
 **Watch event filtering:**

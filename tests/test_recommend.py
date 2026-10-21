@@ -1,10 +1,12 @@
 import socket
+import sqlite3
+from datetime import datetime, timezone
 
 import numpy as np
 import pytest
 
-from app.db import connect, insert_movie, store_vector
-from app.recommend import RecommendError, base_taste_vector, rank, recommend
+from app.db import connect, decode_vector, insert_movie, store_vector
+from app.recommend import RecommendError, rank, recommend
 from app.vectors import FULL_DIMENSION, VECTOR_VERSION, Movie
 
 
@@ -16,10 +18,6 @@ def test_recommend_never_returns_a_watched_movie(seeded_db, library):
         assert returned
         assert returned.isdisjoint(user["watched"])
         assert len(returned) == len(library["movies"]) - len(user["watched"])
-
-
-def test_base_taste_vector_is_the_unweighted_mean():
-    np.testing.assert_allclose(base_taste_vector(np.array([[1.0, 0.0], [3.0, 2.0]])), [2.0, 1.0])
 
 
 def _padded(*values: float) -> np.ndarray:
@@ -121,3 +119,57 @@ def test_recommend_rejects_stale_vectors(seeded_db):
     conn.execute("UPDATE movie_vectors SET vector_version = vector_version - 1 WHERE movie_id = 1")
     with pytest.raises(RecommendError, match="rebuild"):
         recommend(conn, "alice", top_n=3)
+
+
+NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+
+def _stored_taste(conn, user_name):
+    return conn.execute(
+        "SELECT t.vector_version, t.computed_at, t.vector FROM taste_vectors t"
+        " JOIN users u ON u.id = t.user_id WHERE u.name = ?",
+        (user_name,),
+    ).fetchone()
+
+
+def test_taste_vector_is_built_only_from_the_users_own_events(seeded_db, library):
+    _, conn = seeded_db
+    recommend(conn, "bob", top_n=3, now=NOW)
+    bob_before = _stored_taste(conn, "bob")
+
+    alice_id = conn.execute("SELECT id FROM users WHERE name = 'alice'").fetchone()[0]
+    alice = next(user for user in library["users"] if user["name"] == "alice")
+    unwatched = [m["id"] for m in library["movies"] if m["id"] not in alice["watched"]]
+    conn.executemany(
+        "INSERT INTO watch_events (user_id, movie_id, completion, favourite) VALUES (?, ?, ?, ?)",
+        [(alice_id, unwatched[0], 1.0, 1), (alice_id, unwatched[1], 0.1, 0)],
+    )
+    recommend(conn, "alice", top_n=3, now=NOW)
+    recommend(conn, "bob", top_n=3, now=NOW)
+
+    assert _stored_taste(conn, "bob") == bob_before
+    assert conn.execute("SELECT COUNT(*) FROM taste_vectors").fetchone()[0] == 2
+    for user_name in ("alice", "bob"):
+        version, computed_at, blob = _stored_taste(conn, user_name)
+        assert version == VECTOR_VERSION
+        assert computed_at == NOW.isoformat()
+        assert decode_vector(blob).shape == (FULL_DIMENSION,)
+
+
+def test_connect_adds_taste_signal_columns_to_an_existing_database(tmp_path):
+    path = tmp_path / "legacy.db"
+    legacy = sqlite3.connect(path)
+    legacy.executescript(
+        "CREATE TABLE watch_events (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL,"
+        " movie_id INTEGER NOT NULL);"
+        "INSERT INTO watch_events (user_id, movie_id) VALUES (1, 2);"
+    )
+    legacy.close()
+
+    conn = connect(path)
+    connect(path).close()
+
+    assert conn.execute(
+        "SELECT user_id, movie_id, completion, play_count, favourite, not_interested, watched_at"
+        " FROM watch_events"
+    ).fetchall() == [(1, 2, 1.0, 1, 0, 0, None)]
