@@ -189,6 +189,8 @@ python3 -m app.cli recommend --db moflix.db --user "ak261" --top 10
 ```
 app/vectors.py       — Movie dataclass, build_movie_vector(), embed_texts(), build_full_vector()
 app/db.py            — SQLite schema and read/write helpers
+app/taste.py         — TasteParams, WatchEvent, build_base_taste_vector() (weighted, pure)
+app/recommend.py     — Builds and stores the user's taste vector, ranks unwatched movies
 app/seed.py          — JSON fixture → DB (used in tests)
 app/emby_sync.py     — Emby CSV + TMDB → DB (used in production)
 app/cli.py           — Entry point: seed / recommend / sync
@@ -204,7 +206,7 @@ tests/fixtures/      — Synthetic 24-movie fixture for unit tests
 
 | Issue | What it adds |
 |---|---|
-| #2 weighted-taste-vector | Completion %, rewatch count, recency decay weights |
+| ~~#2 weighted-taste-vector~~ | Done (PR #16): completion %, rewatch count, favourite, recency decay and negative signals |
 | #3 filters-diversity-explanations | MMR diversity, hard filters, per-recommendation reasons |
 | #4 emby-sync | Automated nightly sync via Emby HTTP API (replaces manual CSV) |
 | #5 auth-sessions | Login, session cookies, user isolation |
