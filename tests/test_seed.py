@@ -2,7 +2,7 @@ import pytest
 
 from app.db import decode_vector
 from app.seed import SeedError, seed
-from app.vectors import DIMENSION, VECTOR_VERSION
+from app.vectors import FULL_DIMENSION, VECTOR_VERSION
 
 
 def test_seed_stores_a_versioned_vector_of_declared_length_for_every_movie(seeded_db, library):
@@ -15,8 +15,8 @@ def test_seed_stores_a_versioned_vector_of_declared_length_for_every_movie(seede
     assert len(rows) == len(library["movies"])
     for _, version, dimension, blob in rows:
         assert version == VECTOR_VERSION
-        assert dimension == DIMENSION
-        assert decode_vector(blob).shape == (DIMENSION,)
+        assert dimension == FULL_DIMENSION
+        assert decode_vector(blob).shape == (FULL_DIMENSION,)
 
 
 def test_seed_records_watch_events_per_user(seeded_db, library):
@@ -30,8 +30,8 @@ def test_seed_records_watch_events_per_user(seeded_db, library):
         assert [row[0] for row in watched] == sorted(user["watched"])
 
 
-def test_seed_refuses_an_already_seeded_database(seeded_db, library):
+def test_seed_refuses_an_already_seeded_database(seeded_db, library, fake_embedder):
     _, conn = seeded_db
     with pytest.raises(SeedError):
-        seed(conn, library)
+        seed(conn, library, embedder=fake_embedder)
     assert conn.execute("SELECT COUNT(*) FROM movies").fetchone()[0] == len(library["movies"])

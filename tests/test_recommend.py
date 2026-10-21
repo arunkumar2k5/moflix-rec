@@ -5,7 +5,7 @@ import pytest
 
 from app.db import connect, insert_movie, store_vector
 from app.recommend import RecommendError, base_taste_vector, rank, recommend
-from app.vectors import DIMENSION, VECTOR_VERSION, Movie
+from app.vectors import FULL_DIMENSION, VECTOR_VERSION, Movie
 
 
 def test_recommend_never_returns_a_watched_movie(seeded_db, library):
@@ -23,7 +23,7 @@ def test_base_taste_vector_is_the_unweighted_mean():
 
 
 def _padded(*values: float) -> np.ndarray:
-    vector = np.zeros(DIMENSION)
+    vector = np.zeros(FULL_DIMENSION)
     vector[: len(values)] = values
     return vector
 

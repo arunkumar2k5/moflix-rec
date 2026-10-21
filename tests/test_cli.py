@@ -9,19 +9,20 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 LINE = re.compile(r"^.+ \(\d{4}\) -?\d+\.\d{4}$")
 
 
-def run_cli(*args: str) -> subprocess.CompletedProcess:
+def run_cli(*args: str, timeout: int = 60) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, "-m", "app.cli", *args],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=timeout,
     )
 
 
 def test_seed_then_recommend_prints_top_n_lines(tmp_path):
     db = str(tmp_path / "cli.db")
-    seeded = run_cli("seed", "--db", db, "--fixture", str(FIXTURE_PATH))
+    # seed embeds 24 movies with the local model; allow extra time on first run.
+    seeded = run_cli("seed", "--db", db, "--fixture", str(FIXTURE_PATH), timeout=300)
     assert seeded.returncode == 0, seeded.stderr
 
     result = run_cli("recommend", "--db", db, "--user", "alice", "--top", "3")
@@ -34,7 +35,7 @@ def test_seed_then_recommend_prints_top_n_lines(tmp_path):
 
 def test_recommend_for_unknown_user_exits_nonzero(tmp_path):
     db = str(tmp_path / "cli.db")
-    run_cli("seed", "--db", db, "--fixture", str(FIXTURE_PATH))
+    run_cli("seed", "--db", db, "--fixture", str(FIXTURE_PATH), timeout=300)
 
     result = run_cli("recommend", "--db", db, "--user", "mallory", "--top", "3")
 

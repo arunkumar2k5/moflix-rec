@@ -9,7 +9,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from app.db import decode_vector
-from app.vectors import DIMENSION, VECTOR_VERSION
+from app.vectors import FULL_DIMENSION, VECTOR_VERSION
 
 
 class RecommendError(Exception):
@@ -47,13 +47,13 @@ def _load_vectors(conn: sqlite3.Connection) -> tuple[np.ndarray, np.ndarray]:
     rows = conn.execute(
         "SELECT movie_id, vector_version, dimension, vector FROM movie_vectors ORDER BY movie_id"
     ).fetchall()
-    stale = sum(version != VECTOR_VERSION or dim != DIMENSION for _, version, dim, _ in rows)
+    stale = sum(version != VECTOR_VERSION or dim != FULL_DIMENSION for _, version, dim, _ in rows)
     if stale:
         raise RecommendError(
             f"{stale} movie vectors are not version {VECTOR_VERSION}; rebuild them first"
         )
     ids = np.array([row[0] for row in rows], dtype=np.int64)
-    matrix = np.array([decode_vector(row[3]) for row in rows]).reshape(len(rows), DIMENSION)
+    matrix = np.array([decode_vector(row[3]) for row in rows]).reshape(len(rows), FULL_DIMENSION)
     return ids, matrix
 
 

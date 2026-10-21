@@ -1,13 +1,20 @@
-"""Structured movie vectors: a fixed-length layout of metadata features."""
+"""Movie vectors: structured metadata features + local sentence embedding."""
 
 import hashlib
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import numpy as np
 
-# Bump whenever the layout below changes; stored vectors with another version are stale.
-VECTOR_VERSION = 1
+if TYPE_CHECKING:
+    from sentence_transformers import SentenceTransformer
+
+# Bump whenever the layout or embedding model changes; stored vectors with old version are stale.
+VECTOR_VERSION = 2
+
+EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
+EMBEDDING_DIM = 384
 
 GENRES = (
     "Action",
@@ -55,6 +62,8 @@ class Movie:
     rating: float
     director: str
     cast: Sequence[str]
+    overview: str = ""
+    keywords: Sequence[str] = field(default_factory=tuple)
 
 
 def _layout() -> dict[str, slice]:
@@ -77,7 +86,10 @@ def _layout() -> dict[str, slice]:
 
 
 LAYOUT = _layout()
+# Structured-only dimension (no embedding).
 DIMENSION = max(s.stop for s in LAYOUT.values())
+# Full dimension including the sentence embedding tail.
+FULL_DIMENSION = DIMENSION + EMBEDDING_DIM
 
 
 def _index_or_other(vocabulary: Sequence[str], value: str) -> int:
@@ -100,6 +112,7 @@ def hash_bucket(name: str, buckets: int) -> int:
 
 
 def build_movie_vector(movie: Movie) -> np.ndarray:
+    """Return the 106-dimensional structured feature vector for a movie."""
     vector = np.zeros(DIMENSION)
 
     def set_slot(feature: str, index: int, value: float = 1.0) -> None:
@@ -118,3 +131,33 @@ def build_movie_vector(movie: Movie) -> np.ndarray:
     for actor in movie.cast[:TOP_CAST]:
         set_slot("cast", hash_bucket(actor, CAST_BUCKETS))
     return vector
+
+
+def _movie_text(movie: Movie) -> str:
+    """Combine overview and keywords into a single string for embedding."""
+    parts = [movie.overview] + list(movie.keywords)
+    return " ".join(p for p in parts if p).strip()
+
+
+def embed_texts(texts: list[str], model: "SentenceTransformer | None" = None) -> np.ndarray:
+    """Embed a list of strings using all-MiniLM-L6-v2.
+
+    Returns an (N, 384) float32 array. Loads the model on first call if not
+    provided; pass a pre-loaded model to avoid repeated disk reads.
+    """
+    if model is None:
+        from sentence_transformers import SentenceTransformer
+
+        model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+    embeddings = model.encode(texts, normalize_embeddings=True, show_progress_bar=False)
+    return np.asarray(embeddings, dtype=np.float32)
+
+
+def build_full_vector(movie: Movie, embedding: np.ndarray) -> np.ndarray:
+    """Concatenate the 106-dim structured vector with a 384-dim text embedding.
+
+    The caller is responsible for normalising `embedding` before passing it in.
+    Returns a 490-dimensional float64 vector.
+    """
+    structured = build_movie_vector(movie)
+    return np.concatenate([structured, embedding.astype(np.float64)])

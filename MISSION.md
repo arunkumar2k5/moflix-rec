@@ -129,6 +129,7 @@ These are undecided, not forbidden. The factory may propose an answer, build aga
 
 ## Decisions
 
+- **2026-10-21** **Text embeddings in v1 (Q2)?** Yes, using `all-MiniLM-L6-v2` (sentence-transformers, local, CPU-only, no API cost). Movie vectors are 490-dim: 106 structured + 384 embedding. Embedding runs at sync time only; scoring is still fully local.
 - **2026-10-20** **Group mode in v1?** No. Deferred to post-v1.
 - **2026-10-20** **Local LLM?** Never. External API only, provider-agnostic abstraction layer.
 

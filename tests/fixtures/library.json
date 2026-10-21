@@ -4,521 +4,371 @@
       "id": 1,
       "title": "The Godfather",
       "year": 1972,
-      "genres": [
-        "Crime",
-        "Drama"
-      ],
+      "genres": ["Crime", "Drama"],
       "runtime": 175,
       "language": "en",
       "country": "US",
       "certification": "R",
       "rating": 8.7,
       "director": "Francis Ford Coppola",
-      "cast": [
-        "Marlon Brando",
-        "Al Pacino",
-        "James Caan"
-      ]
+      "cast": ["Marlon Brando", "Al Pacino", "James Caan"],
+      "overview": "The aging patriarch of an organized crime dynasty transfers control to his reluctant son.",
+      "keywords": ["mafia", "organized crime", "family", "power", "loyalty"]
     },
     {
       "id": 2,
       "title": "Alien",
       "year": 1979,
-      "genres": [
-        "Horror",
-        "Science Fiction"
-      ],
+      "genres": ["Horror", "Science Fiction"],
       "runtime": 117,
       "language": "en",
       "country": "GB",
       "certification": "R",
       "rating": 8.2,
       "director": "Ridley Scott",
-      "cast": [
-        "Sigourney Weaver",
-        "Tom Skerritt",
-        "John Hurt"
-      ]
+      "cast": ["Sigourney Weaver", "Tom Skerritt", "John Hurt"],
+      "overview": "A crew of a commercial spacecraft encounter a deadly extraterrestrial creature.",
+      "keywords": ["alien", "survival", "space", "horror", "creature"]
     },
     {
       "id": 3,
       "title": "Raiders of the Lost Ark",
       "year": 1981,
-      "genres": [
-        "Action",
-        "Adventure"
-      ],
+      "genres": ["Action", "Adventure"],
       "runtime": 115,
       "language": "en",
       "country": "US",
       "certification": "PG",
       "rating": 7.9,
       "director": "Steven Spielberg",
-      "cast": [
-        "Harrison Ford",
-        "Karen Allen",
-        "Paul Freeman"
-      ]
+      "cast": ["Harrison Ford", "Karen Allen", "Paul Freeman"],
+      "overview": "Archaeologist Indiana Jones races to find the Ark of the Covenant before the Nazis.",
+      "keywords": ["adventure", "archaeology", "nazis", "treasure hunt", "action"]
     },
     {
       "id": 4,
       "title": "Blade Runner",
       "year": 1982,
-      "genres": [
-        "Science Fiction",
-        "Thriller"
-      ],
+      "genres": ["Science Fiction", "Thriller"],
       "runtime": 117,
       "language": "en",
       "country": "US",
       "certification": "R",
       "rating": 7.9,
       "director": "Ridley Scott",
-      "cast": [
-        "Harrison Ford",
-        "Rutger Hauer",
-        "Sean Young"
-      ]
+      "cast": ["Harrison Ford", "Rutger Hauer", "Sean Young"],
+      "overview": "A blade runner must pursue and terminate replicants who have stolen a spacecraft and returned to Earth.",
+      "keywords": ["dystopia", "artificial intelligence", "replicants", "noir", "future"]
     },
     {
       "id": 5,
       "title": "Back to the Future",
       "year": 1985,
-      "genres": [
-        "Adventure",
-        "Comedy",
-        "Science Fiction"
-      ],
+      "genres": ["Adventure", "Comedy", "Science Fiction"],
       "runtime": 116,
       "language": "en",
       "country": "US",
       "certification": "PG",
       "rating": 8.3,
       "director": "Robert Zemeckis",
-      "cast": [
-        "Michael J. Fox",
-        "Christopher Lloyd",
-        "Lea Thompson"
-      ]
+      "cast": ["Michael J. Fox", "Christopher Lloyd", "Lea Thompson"],
+      "overview": "A teenager accidentally travels back to 1955 in a time machine and must ensure his parents fall in love.",
+      "keywords": ["time travel", "comedy", "teenager", "1950s", "adventure"]
     },
     {
       "id": 6,
       "title": "My Neighbor Totoro",
       "year": 1988,
-      "genres": [
-        "Animation",
-        "Family",
-        "Fantasy"
-      ],
+      "genres": ["Animation", "Family", "Fantasy"],
       "runtime": 86,
       "language": "ja",
       "country": "JP",
       "certification": "G",
       "rating": 8.1,
       "director": "Hayao Miyazaki",
-      "cast": [
-        "Noriko Hidaka",
-        "Chika Sakamoto",
-        "Shigesato Itoi"
-      ]
+      "cast": ["Noriko Hidaka", "Chika Sakamoto", "Shigesato Itoi"],
+      "overview": "Two young girls move to the countryside and encounter friendly forest spirits.",
+      "keywords": ["spirit", "forest", "childhood", "Japan", "magical", "family"]
     },
     {
       "id": 7,
       "title": "Die Hard",
       "year": 1988,
-      "genres": [
-        "Action",
-        "Thriller"
-      ],
+      "genres": ["Action", "Thriller"],
       "runtime": 132,
       "language": "en",
       "country": "US",
       "certification": "R",
       "rating": 7.8,
       "director": "John McTiernan",
-      "cast": [
-        "Bruce Willis",
-        "Alan Rickman",
-        "Bonnie Bedelia"
-      ]
+      "cast": ["Bruce Willis", "Alan Rickman", "Bonnie Bedelia"],
+      "overview": "A New York cop tries to save his estranged wife and several others held hostage by terrorists.",
+      "keywords": ["heist", "hostage", "christmas", "skyscraper", "one man army"]
     },
     {
       "id": 8,
       "title": "Goodfellas",
       "year": 1990,
-      "genres": [
-        "Crime",
-        "Drama"
-      ],
+      "genres": ["Crime", "Drama"],
       "runtime": 146,
       "language": "en",
       "country": "US",
       "certification": "R",
       "rating": 8.5,
       "director": "Martin Scorsese",
-      "cast": [
-        "Robert De Niro",
-        "Ray Liotta",
-        "Joe Pesci"
-      ]
+      "cast": ["Robert De Niro", "Ray Liotta", "Joe Pesci"],
+      "overview": "The story of Henry Hill and his life in the mob, covering his rise and fall.",
+      "keywords": ["mob", "gangster", "mafia", "rise and fall", "crime"]
     },
     {
       "id": 9,
       "title": "Groundhog Day",
       "year": 1993,
-      "genres": [
-        "Comedy",
-        "Fantasy",
-        "Romance"
-      ],
+      "genres": ["Comedy", "Fantasy", "Romance"],
       "runtime": 101,
       "language": "en",
       "country": "US",
       "certification": "PG",
       "rating": 7.6,
       "director": "Harold Ramis",
-      "cast": [
-        "Bill Murray",
-        "Andie MacDowell",
-        "Chris Elliott"
-      ]
+      "cast": ["Bill Murray", "Andie MacDowell", "Chris Elliott"],
+      "overview": "A cynical TV weatherman finds himself reliving the same day over and over again.",
+      "keywords": ["time loop", "comedy", "self-improvement", "romance", "repetition"]
     },
     {
       "id": 10,
       "title": "Pulp Fiction",
       "year": 1994,
-      "genres": [
-        "Crime",
-        "Thriller"
-      ],
+      "genres": ["Crime", "Thriller"],
       "runtime": 154,
       "language": "en",
       "country": "US",
       "certification": "R",
       "rating": 8.5,
       "director": "Quentin Tarantino",
-      "cast": [
-        "John Travolta",
-        "Samuel L. Jackson",
-        "Uma Thurman"
-      ]
+      "cast": ["John Travolta", "Samuel L. Jackson", "Uma Thurman"],
+      "overview": "The lives of two mob hitmen, a boxer, a gangster's wife and a pair of diner bandits intertwine.",
+      "keywords": ["nonlinear", "dialogue", "violence", "hitman", "los angeles"]
     },
     {
       "id": 11,
       "title": "Heat",
       "year": 1995,
-      "genres": [
-        "Action",
-        "Crime",
-        "Drama"
-      ],
+      "genres": ["Action", "Crime", "Drama"],
       "runtime": 170,
       "language": "en",
       "country": "US",
       "certification": "R",
       "rating": 7.9,
       "director": "Michael Mann",
-      "cast": [
-        "Al Pacino",
-        "Robert De Niro",
-        "Val Kilmer"
-      ]
+      "cast": ["Al Pacino", "Robert De Niro", "Val Kilmer"],
+      "overview": "A detective and a master thief play a cat-and-mouse game in Los Angeles.",
+      "keywords": ["heist", "detective", "cat and mouse", "los angeles", "professional criminal"]
     },
     {
       "id": 12,
       "title": "Amelie",
       "year": 2001,
-      "genres": [
-        "Comedy",
-        "Romance"
-      ],
+      "genres": ["Comedy", "Romance"],
       "runtime": 122,
       "language": "fr",
       "country": "FR",
       "certification": "R",
       "rating": 7.9,
       "director": "Jean-Pierre Jeunet",
-      "cast": [
-        "Audrey Tautou",
-        "Mathieu Kassovitz",
-        "Rufus"
-      ]
+      "cast": ["Audrey Tautou", "Mathieu Kassovitz", "Rufus"],
+      "overview": "A shy Parisian waitress decides to help those around her find happiness while neglecting her own.",
+      "keywords": ["paris", "whimsy", "romance", "quirky", "kindness"]
     },
     {
       "id": 13,
       "title": "Spirited Away",
       "year": 2001,
-      "genres": [
-        "Animation",
-        "Family",
-        "Fantasy"
-      ],
+      "genres": ["Animation", "Family", "Fantasy"],
       "runtime": 125,
       "language": "ja",
       "country": "JP",
       "certification": "PG",
       "rating": 8.5,
       "director": "Hayao Miyazaki",
-      "cast": [
-        "Rumi Hiiragi",
-        "Miyu Irino",
-        "Mari Natsuki"
-      ]
+      "cast": ["Rumi Hiiragi", "Miyu Irino", "Mari Natsuki"],
+      "overview": "A young girl wanders into a world ruled by gods and witches and must find a way to free herself.",
+      "keywords": ["spirit world", "coming of age", "Japan", "magical", "courage"]
     },
     {
       "id": 14,
       "title": "Oldboy",
       "year": 2003,
-      "genres": [
-        "Action",
-        "Mystery",
-        "Thriller"
-      ],
+      "genres": ["Action", "Mystery", "Thriller"],
       "runtime": 120,
       "language": "ko",
       "country": "KR",
       "certification": "R",
       "rating": 8.2,
       "director": "Park Chan-wook",
-      "cast": [
-        "Choi Min-sik",
-        "Yoo Ji-tae",
-        "Kang Hye-jung"
-      ]
+      "cast": ["Choi Min-sik", "Yoo Ji-tae", "Kang Hye-jung"],
+      "overview": "A man is imprisoned for fifteen years without explanation, then released and given five days to find out why.",
+      "keywords": ["revenge", "mystery", "twist", "Korea", "imprisonment"]
     },
     {
       "id": 15,
       "title": "Pan's Labyrinth",
       "year": 2006,
-      "genres": [
-        "Drama",
-        "Fantasy",
-        "War"
-      ],
+      "genres": ["Drama", "Fantasy", "War"],
       "runtime": 118,
       "language": "es",
       "country": "ES",
       "certification": "R",
       "rating": 7.8,
       "director": "Guillermo del Toro",
-      "cast": [
-        "Ivana Baquero",
-        "Sergi Lopez",
-        "Maribel Verdu"
-      ]
+      "cast": ["Ivana Baquero", "Sergi Lopez", "Maribel Verdu"],
+      "overview": "In post-war Spain, a young girl escapes into a fantastical labyrinth to escape her brutal stepfather.",
+      "keywords": ["fantasy", "fairy tale", "war", "dark", "Spain"]
     },
     {
       "id": 16,
       "title": "No Country for Old Men",
       "year": 2007,
-      "genres": [
-        "Crime",
-        "Drama",
-        "Thriller"
-      ],
+      "genres": ["Crime", "Drama", "Thriller"],
       "runtime": 122,
       "language": "en",
       "country": "US",
       "certification": "R",
       "rating": 7.9,
       "director": "Joel Coen",
-      "cast": [
-        "Tommy Lee Jones",
-        "Javier Bardem",
-        "Josh Brolin"
-      ]
+      "cast": ["Tommy Lee Jones", "Javier Bardem", "Josh Brolin"],
+      "overview": "A hunter stumbles upon drug money and is pursued by a relentless and terrifying hitman.",
+      "keywords": ["hitman", "fate", "Texas", "violence", "pursuit"]
     },
     {
       "id": 17,
       "title": "The Dark Knight",
       "year": 2008,
-      "genres": [
-        "Action",
-        "Crime",
-        "Drama"
-      ],
+      "genres": ["Action", "Crime", "Drama"],
       "runtime": 152,
       "language": "en",
       "country": "US",
       "certification": "PG-13",
       "rating": 8.5,
       "director": "Christopher Nolan",
-      "cast": [
-        "Christian Bale",
-        "Heath Ledger",
-        "Aaron Eckhart"
-      ]
+      "cast": ["Christian Bale", "Heath Ledger", "Aaron Eckhart"],
+      "overview": "Batman faces the Joker, a criminal mastermind who plunges Gotham into anarchy.",
+      "keywords": ["superhero", "batman", "joker", "chaos", "vigilante"]
     },
     {
       "id": 18,
       "title": "Up",
       "year": 2009,
-      "genres": [
-        "Adventure",
-        "Animation",
-        "Comedy"
-      ],
+      "genres": ["Adventure", "Animation", "Comedy"],
       "runtime": 96,
       "language": "en",
       "country": "US",
       "certification": "PG",
       "rating": 8.0,
       "director": "Pete Docter",
-      "cast": [
-        "Ed Asner",
-        "Jordan Nagai",
-        "Christopher Plummer"
-      ]
+      "cast": ["Ed Asner", "Jordan Nagai", "Christopher Plummer"],
+      "overview": "An elderly widower ties thousands of balloons to his house and flies to South America with a stowaway boy scout.",
+      "keywords": ["adventure", "friendship", "grief", "family", "balloons"]
     },
     {
       "id": 19,
       "title": "Inception",
       "year": 2010,
-      "genres": [
-        "Action",
-        "Science Fiction",
-        "Thriller"
-      ],
+      "genres": ["Action", "Science Fiction", "Thriller"],
       "runtime": 148,
       "language": "en",
       "country": "US",
       "certification": "PG-13",
       "rating": 8.4,
       "director": "Christopher Nolan",
-      "cast": [
-        "Leonardo DiCaprio",
-        "Joseph Gordon-Levitt",
-        "Elliot Page"
-      ]
+      "cast": ["Leonardo DiCaprio", "Joseph Gordon-Levitt", "Elliot Page"],
+      "overview": "A thief who steals corporate secrets by entering dreams is given the task of planting an idea.",
+      "keywords": ["dreams", "subconscious", "heist", "mind bending", "layers"]
     },
     {
       "id": 20,
       "title": "Mad Max: Fury Road",
       "year": 2015,
-      "genres": [
-        "Action",
-        "Adventure",
-        "Science Fiction"
-      ],
+      "genres": ["Action", "Adventure", "Science Fiction"],
       "runtime": 120,
       "language": "en",
       "country": "US",
       "certification": "R",
       "rating": 7.6,
       "director": "George Miller",
-      "cast": [
-        "Tom Hardy",
-        "Charlize Theron",
-        "Nicholas Hoult"
-      ]
+      "cast": ["Tom Hardy", "Charlize Theron", "Nicholas Hoult"],
+      "overview": "A post-apocalyptic warrior teams up with a rebel female soldier to outrun a warlord.",
+      "keywords": ["post-apocalyptic", "car chase", "survival", "desert", "feminist"]
     },
     {
       "id": 21,
       "title": "Get Out",
       "year": 2017,
-      "genres": [
-        "Horror",
-        "Mystery",
-        "Thriller"
-      ],
+      "genres": ["Horror", "Mystery", "Thriller"],
       "runtime": 104,
       "language": "en",
       "country": "US",
       "certification": "R",
       "rating": 7.6,
       "director": "Jordan Peele",
-      "cast": [
-        "Daniel Kaluuya",
-        "Allison Williams",
-        "Bradley Whitford"
-      ]
+      "cast": ["Daniel Kaluuya", "Allison Williams", "Bradley Whitford"],
+      "overview": "A young Black man visits his white girlfriend's family estate and uncovers a disturbing secret.",
+      "keywords": ["racism", "social horror", "twist", "psychological", "suburb"]
     },
     {
       "id": 22,
       "title": "Parasite",
       "year": 2019,
-      "genres": [
-        "Comedy",
-        "Drama",
-        "Thriller"
-      ],
+      "genres": ["Comedy", "Drama", "Thriller"],
       "runtime": 132,
       "language": "ko",
       "country": "KR",
       "certification": "R",
       "rating": 8.5,
       "director": "Bong Joon-ho",
-      "cast": [
-        "Song Kang-ho",
-        "Lee Sun-kyun",
-        "Cho Yeo-jeong"
-      ]
+      "cast": ["Song Kang-ho", "Lee Sun-kyun", "Cho Yeo-jeong"],
+      "overview": "A poor family schemes to become employed by a wealthy family, with unexpected consequences.",
+      "keywords": ["class struggle", "inequality", "twist", "Korea", "dark comedy"]
     },
     {
       "id": 23,
       "title": "Knives Out",
       "year": 2019,
-      "genres": [
-        "Comedy",
-        "Crime",
-        "Mystery"
-      ],
+      "genres": ["Comedy", "Crime", "Mystery"],
       "runtime": 130,
       "language": "en",
       "country": "US",
       "certification": "PG-13",
       "rating": 7.9,
       "director": "Rian Johnson",
-      "cast": [
-        "Daniel Craig",
-        "Chris Evans",
-        "Ana de Armas"
-      ]
+      "cast": ["Daniel Craig", "Chris Evans", "Ana de Armas"],
+      "overview": "A detective investigates the death of a patriarch of a wealthy and dysfunctional family.",
+      "keywords": ["whodunit", "mystery", "family", "inheritance", "detective"]
     },
     {
       "id": 24,
       "title": "Everything Everywhere All at Once",
       "year": 2022,
-      "genres": [
-        "Action",
-        "Adventure",
-        "Comedy",
-        "Science Fiction"
-      ],
+      "genres": ["Action", "Adventure", "Comedy", "Science Fiction"],
       "runtime": 139,
       "language": "en",
       "country": "US",
       "certification": "R",
       "rating": 7.8,
       "director": "Daniel Kwan",
-      "cast": [
-        "Michelle Yeoh",
-        "Ke Huy Quan",
-        "Stephanie Hsu"
-      ]
+      "cast": ["Michelle Yeoh", "Ke Huy Quan", "Stephanie Hsu"],
+      "overview": "A middle-aged Chinese-American woman discovers she can access skills from parallel universes to save existence.",
+      "keywords": ["multiverse", "family", "absurd", "martial arts", "identity"]
     }
   ],
   "users": [
     {
       "name": "alice",
-      "watched": [
-        1,
-        8,
-        10,
-        11,
-        16,
-        17
-      ]
+      "watched": [1, 8, 10, 11, 16, 17]
     },
     {
       "name": "bob",
-      "watched": [
-        6,
-        9,
-        12,
-        13,
-        18
-      ]
+      "watched": [6, 9, 12, 13, 18]
     }
   ]
 }

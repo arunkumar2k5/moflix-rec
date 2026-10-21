@@ -24,7 +24,9 @@ CREATE TABLE IF NOT EXISTS movies (
     certification TEXT NOT NULL,
     rating REAL NOT NULL,
     director TEXT NOT NULL,
-    "cast" TEXT NOT NULL
+    "cast" TEXT NOT NULL,
+    overview TEXT NOT NULL DEFAULT '',
+    keywords TEXT NOT NULL DEFAULT '[]'
 );
 CREATE TABLE IF NOT EXISTS movie_vectors (
     movie_id INTEGER PRIMARY KEY REFERENCES movies(id),
@@ -54,8 +56,8 @@ def connect(path: str | Path) -> sqlite3.Connection:
 def insert_movie(conn: sqlite3.Connection, movie: Movie) -> None:
     conn.execute(
         "INSERT INTO movies (id, title, year, genres, runtime, language, country,"
-        ' certification, rating, director, "cast")'
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ' certification, rating, director, "cast", overview, keywords)'
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             movie.id,
             movie.title,
@@ -68,6 +70,8 @@ def insert_movie(conn: sqlite3.Connection, movie: Movie) -> None:
             movie.rating,
             movie.director,
             json.dumps(list(movie.cast)),
+            movie.overview,
+            json.dumps(list(movie.keywords)),
         ),
     )
 
