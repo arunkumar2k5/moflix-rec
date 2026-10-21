@@ -1,6 +1,7 @@
-"""Command line entry point: `python -m app.cli seed|recommend`."""
+"""Command line entry point: `python -m app.cli seed|recommend|sync`."""
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -28,6 +29,15 @@ def _parser() -> argparse.ArgumentParser:
     rec_cmd.add_argument("--db", required=True)
     rec_cmd.add_argument("--user", required=True)
     rec_cmd.add_argument("--top", type=_positive_int, default=10)
+
+    sync_cmd = commands.add_parser("sync", help="populate DB from Emby CSV exports + TMDB")
+    sync_cmd.add_argument("--db", required=True)
+    sync_cmd.add_argument("--data-dir", required=True)
+    sync_cmd.add_argument(
+        "--tmdb-key",
+        default=None,
+        help="TMDB API key (defaults to TMDB_API_KEY env var)",
+    )
     return parser
 
 
@@ -36,6 +46,21 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "recommend" and not Path(args.db).is_file():
         print(f"error: database not found: {args.db}", file=sys.stderr)
         return 1
+    if args.command == "sync":
+        from app.emby_sync import SyncError
+        from app.emby_sync import sync as emby_sync
+
+        api_key = args.tmdb_key or os.environ.get("TMDB_API_KEY", "")
+        if not api_key:
+            print("error: TMDB API key required (--tmdb-key or TMDB_API_KEY)", file=sys.stderr)
+            return 1
+        try:
+            emby_sync(args.db, args.data_dir, api_key)
+        except SyncError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+        return 0
+
     conn = connect(args.db)
     try:
         if args.command == "seed":

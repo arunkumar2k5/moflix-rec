@@ -3,7 +3,7 @@ name = "moflix-rec"
 version = "0.1.0"
 description = "Self-hosted chat-based movie recommender"
 requires-python = ">=3.10"
-dependencies = ["numpy>=1.26", "sentence-transformers>=3.0"]
+dependencies = ["numpy>=1.26", "sentence-transformers>=3.0", "requests>=2.31"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.6"]

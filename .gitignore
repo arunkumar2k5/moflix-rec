@@ -9,3 +9,6 @@ node_modules/
 *.log
 .factory-env
 *.egg-info/
+.tmdb_cache.json
+data/emby/
+*.db
