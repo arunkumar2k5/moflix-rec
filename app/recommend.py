@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 import numpy as np
 
 from app.db import decode_vector, store_taste_vector
-from app.taste import TasteParams, WatchEvent, build_base_taste_vector
+from app.taste import WatchEvent, build_base_taste_vector
 from app.vectors import FULL_DIMENSION, VECTOR_VERSION
 
 
@@ -84,7 +84,7 @@ def recommend(
         raise RecommendError(f"user {user_name} has no watch history to build a taste vector from")
     ids, matrix = _load_vectors(conn)
     vectors = dict(zip(ids.tolist(), matrix, strict=True))
-    taste = build_base_taste_vector(events, vectors, now, TasteParams())
+    taste = build_base_taste_vector(events, vectors, now)
     with conn:
         store_taste_vector(conn, user_id, VECTOR_VERSION, taste, now)
     watched = np.isin(ids, [event.movie_id for event in events])
