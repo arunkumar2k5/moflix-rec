@@ -1,0 +1,524 @@
+{
+  "movies": [
+    {
+      "id": 1,
+      "title": "The Godfather",
+      "year": 1972,
+      "genres": [
+        "Crime",
+        "Drama"
+      ],
+      "runtime": 175,
+      "language": "en",
+      "country": "US",
+      "certification": "R",
+      "rating": 8.7,
+      "director": "Francis Ford Coppola",
+      "cast": [
+        "Marlon Brando",
+        "Al Pacino",
+        "James Caan"
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Alien",
+      "year": 1979,
+      "genres": [
+        "Horror",
+        "Science Fiction"
+      ],
+      "runtime": 117,
+      "language": "en",
+      "country": "GB",
+      "certification": "R",
+      "rating": 8.2,
+      "director": "Ridley Scott",
+      "cast": [
+        "Sigourney Weaver",
+        "Tom Skerritt",
+        "John Hurt"
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Raiders of the Lost Ark",
+      "year": 1981,
+      "genres": [
+        "Action",
+        "Adventure"
+      ],
+      "runtime": 115,
+      "language": "en",
+      "country": "US",
+      "certification": "PG",
+      "rating": 7.9,
+      "director": "Steven Spielberg",
+      "cast": [
+        "Harrison Ford",
+        "Karen Allen",
+        "Paul Freeman"
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Blade Runner",
+      "year": 1982,
+      "genres": [
+        "Science Fiction",
+        "Thriller"
+      ],
+      "runtime": 117,
+      "language": "en",
+      "country": "US",
+      "certification": "R",
+      "rating": 7.9,
+      "director": "Ridley Scott",
+      "cast": [
+        "Harrison Ford",
+        "Rutger Hauer",
+        "Sean Young"
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Back to the Future",
+      "year": 1985,
+      "genres": [
+        "Adventure",
+        "Comedy",
+        "Science Fiction"
+      ],
+      "runtime": 116,
+      "language": "en",
+      "country": "US",
+      "certification": "PG",
+      "rating": 8.3,
+      "director": "Robert Zemeckis",
+      "cast": [
+        "Michael J. Fox",
+        "Christopher Lloyd",
+        "Lea Thompson"
+      ]
+    },
+    {
+      "id": 6,
+      "title": "My Neighbor Totoro",
+      "year": 1988,
+      "genres": [
+        "Animation",
+        "Family",
+        "Fantasy"
+      ],
+      "runtime": 86,
+      "language": "ja",
+      "country": "JP",
+      "certification": "G",
+      "rating": 8.1,
+      "director": "Hayao Miyazaki",
+      "cast": [
+        "Noriko Hidaka",
+        "Chika Sakamoto",
+        "Shigesato Itoi"
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Die Hard",
+      "year": 1988,
+      "genres": [
+        "Action",
+        "Thriller"
+      ],
+      "runtime": 132,
+      "language": "en",
+      "country": "US",
+      "certification": "R",
+      "rating": 7.8,
+      "director": "John McTiernan",
+      "cast": [
+        "Bruce Willis",
+        "Alan Rickman",
+        "Bonnie Bedelia"
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Goodfellas",
+      "year": 1990,
+      "genres": [
+        "Crime",
+        "Drama"
+      ],
+      "runtime": 146,
+      "language": "en",
+      "country": "US",
+      "certification": "R",
+      "rating": 8.5,
+      "director": "Martin Scorsese",
+      "cast": [
+        "Robert De Niro",
+        "Ray Liotta",
+        "Joe Pesci"
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Groundhog Day",
+      "year": 1993,
+      "genres": [
+        "Comedy",
+        "Fantasy",
+        "Romance"
+      ],
+      "runtime": 101,
+      "language": "en",
+      "country": "US",
+      "certification": "PG",
+      "rating": 7.6,
+      "director": "Harold Ramis",
+      "cast": [
+        "Bill Murray",
+        "Andie MacDowell",
+        "Chris Elliott"
+      ]
+    },
+    {
+      "id": 10,
+      "title": "Pulp Fiction",
+      "year": 1994,
+      "genres": [
+        "Crime",
+        "Thriller"
+      ],
+      "runtime": 154,
+      "language": "en",
+      "country": "US",
+      "certification": "R",
+      "rating": 8.5,
+      "director": "Quentin Tarantino",
+      "cast": [
+        "John Travolta",
+        "Samuel L. Jackson",
+        "Uma Thurman"
+      ]
+    },
+    {
+      "id": 11,
+      "title": "Heat",
+      "year": 1995,
+      "genres": [
+        "Action",
+        "Crime",
+        "Drama"
+      ],
+      "runtime": 170,
+      "language": "en",
+      "country": "US",
+      "certification": "R",
+      "rating": 7.9,
+      "director": "Michael Mann",
+      "cast": [
+        "Al Pacino",
+        "Robert De Niro",
+        "Val Kilmer"
+      ]
+    },
+    {
+      "id": 12,
+      "title": "Amelie",
+      "year": 2001,
+      "genres": [
+        "Comedy",
+        "Romance"
+      ],
+      "runtime": 122,
+      "language": "fr",
+      "country": "FR",
+      "certification": "R",
+      "rating": 7.9,
+      "director": "Jean-Pierre Jeunet",
+      "cast": [
+        "Audrey Tautou",
+        "Mathieu Kassovitz",
+        "Rufus"
+      ]
+    },
+    {
+      "id": 13,
+      "title": "Spirited Away",
+      "year": 2001,
+      "genres": [
+        "Animation",
+        "Family",
+        "Fantasy"
+      ],
+      "runtime": 125,
+      "language": "ja",
+      "country": "JP",
+      "certification": "PG",
+      "rating": 8.5,
+      "director": "Hayao Miyazaki",
+      "cast": [
+        "Rumi Hiiragi",
+        "Miyu Irino",
+        "Mari Natsuki"
+      ]
+    },
+    {
+      "id": 14,
+      "title": "Oldboy",
+      "year": 2003,
+      "genres": [
+        "Action",
+        "Mystery",
+        "Thriller"
+      ],
+      "runtime": 120,
+      "language": "ko",
+      "country": "KR",
+      "certification": "R",
+      "rating": 8.2,
+      "director": "Park Chan-wook",
+      "cast": [
+        "Choi Min-sik",
+        "Yoo Ji-tae",
+        "Kang Hye-jung"
+      ]
+    },
+    {
+      "id": 15,
+      "title": "Pan's Labyrinth",
+      "year": 2006,
+      "genres": [
+        "Drama",
+        "Fantasy",
+        "War"
+      ],
+      "runtime": 118,
+      "language": "es",
+      "country": "ES",
+      "certification": "R",
+      "rating": 7.8,
+      "director": "Guillermo del Toro",
+      "cast": [
+        "Ivana Baquero",
+        "Sergi Lopez",
+        "Maribel Verdu"
+      ]
+    },
+    {
+      "id": 16,
+      "title": "No Country for Old Men",
+      "year": 2007,
+      "genres": [
+        "Crime",
+        "Drama",
+        "Thriller"
+      ],
+      "runtime": 122,
+      "language": "en",
+      "country": "US",
+      "certification": "R",
+      "rating": 7.9,
+      "director": "Joel Coen",
+      "cast": [
+        "Tommy Lee Jones",
+        "Javier Bardem",
+        "Josh Brolin"
+      ]
+    },
+    {
+      "id": 17,
+      "title": "The Dark Knight",
+      "year": 2008,
+      "genres": [
+        "Action",
+        "Crime",
+        "Drama"
+      ],
+      "runtime": 152,
+      "language": "en",
+      "country": "US",
+      "certification": "PG-13",
+      "rating": 8.5,
+      "director": "Christopher Nolan",
+      "cast": [
+        "Christian Bale",
+        "Heath Ledger",
+        "Aaron Eckhart"
+      ]
+    },
+    {
+      "id": 18,
+      "title": "Up",
+      "year": 2009,
+      "genres": [
+        "Adventure",
+        "Animation",
+        "Comedy"
+      ],
+      "runtime": 96,
+      "language": "en",
+      "country": "US",
+      "certification": "PG",
+      "rating": 8.0,
+      "director": "Pete Docter",
+      "cast": [
+        "Ed Asner",
+        "Jordan Nagai",
+        "Christopher Plummer"
+      ]
+    },
+    {
+      "id": 19,
+      "title": "Inception",
+      "year": 2010,
+      "genres": [
+        "Action",
+        "Science Fiction",
+        "Thriller"
+      ],
+      "runtime": 148,
+      "language": "en",
+      "country": "US",
+      "certification": "PG-13",
+      "rating": 8.4,
+      "director": "Christopher Nolan",
+      "cast": [
+        "Leonardo DiCaprio",
+        "Joseph Gordon-Levitt",
+        "Elliot Page"
+      ]
+    },
+    {
+      "id": 20,
+      "title": "Mad Max: Fury Road",
+      "year": 2015,
+      "genres": [
+        "Action",
+        "Adventure",
+        "Science Fiction"
+      ],
+      "runtime": 120,
+      "language": "en",
+      "country": "US",
+      "certification": "R",
+      "rating": 7.6,
+      "director": "George Miller",
+      "cast": [
+        "Tom Hardy",
+        "Charlize Theron",
+        "Nicholas Hoult"
+      ]
+    },
+    {
+      "id": 21,
+      "title": "Get Out",
+      "year": 2017,
+      "genres": [
+        "Horror",
+        "Mystery",
+        "Thriller"
+      ],
+      "runtime": 104,
+      "language": "en",
+      "country": "US",
+      "certification": "R",
+      "rating": 7.6,
+      "director": "Jordan Peele",
+      "cast": [
+        "Daniel Kaluuya",
+        "Allison Williams",
+        "Bradley Whitford"
+      ]
+    },
+    {
+      "id": 22,
+      "title": "Parasite",
+      "year": 2019,
+      "genres": [
+        "Comedy",
+        "Drama",
+        "Thriller"
+      ],
+      "runtime": 132,
+      "language": "ko",
+      "country": "KR",
+      "certification": "R",
+      "rating": 8.5,
+      "director": "Bong Joon-ho",
+      "cast": [
+        "Song Kang-ho",
+        "Lee Sun-kyun",
+        "Cho Yeo-jeong"
+      ]
+    },
+    {
+      "id": 23,
+      "title": "Knives Out",
+      "year": 2019,
+      "genres": [
+        "Comedy",
+        "Crime",
+        "Mystery"
+      ],
+      "runtime": 130,
+      "language": "en",
+      "country": "US",
+      "certification": "PG-13",
+      "rating": 7.9,
+      "director": "Rian Johnson",
+      "cast": [
+        "Daniel Craig",
+        "Chris Evans",
+        "Ana de Armas"
+      ]
+    },
+    {
+      "id": 24,
+      "title": "Everything Everywhere All at Once",
+      "year": 2022,
+      "genres": [
+        "Action",
+        "Adventure",
+        "Comedy",
+        "Science Fiction"
+      ],
+      "runtime": 139,
+      "language": "en",
+      "country": "US",
+      "certification": "R",
+      "rating": 7.8,
+      "director": "Daniel Kwan",
+      "cast": [
+        "Michelle Yeoh",
+        "Ke Huy Quan",
+        "Stephanie Hsu"
+      ]
+    }
+  ],
+  "users": [
+    {
+      "name": "alice",
+      "watched": [
+        1,
+        8,
+        10,
+        11,
+        16,
+        17
+      ]
+    },
+    {
+      "name": "bob",
+      "watched": [
+        6,
+        9,
+        12,
+        13,
+        18
+      ]
+    }
+  ]
+}
