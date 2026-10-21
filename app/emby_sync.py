@@ -33,8 +33,6 @@ TMDB_BASE = "https://api.themoviedb.org/3"
 TMDB_CACHE = Path(".tmdb_cache.json")
 # Skip plays under this threshold — accidental starts or trailers
 MIN_WATCH_MINUTES = 5
-# Treat as watched (positive signal) if played more than this fraction of runtime
-COMPLETION_THRESHOLD = 0.5
 
 
 class SyncError(Exception):
@@ -198,9 +196,11 @@ def fallback_movie(item_id: int, title: str, longest_play: float) -> Movie:
 # ---------------------------------------------------------------------------
 
 
-def build_watch_map(watch_events: list[dict], canonical_ids: dict[str, int]) -> dict[tuple, float]:
-    """Return {(username, movie_id): total_minutes} keeping only meaningful plays."""
-    result: dict[tuple, float] = {}
+def build_watch_map(
+    watch_events: list[dict], canonical_ids: dict[str, int]
+) -> dict[tuple[str, int], tuple[float, int]]:
+    """Return {(username, movie_id): (total_minutes, play_count)} keeping only meaningful plays."""
+    result: dict[tuple[str, int], tuple[float, int]] = {}
     for row in watch_events:
         username = row["UserName"].strip()
         title = row["ItemName"].strip()
@@ -210,8 +210,10 @@ def build_watch_map(watch_events: list[dict], canonical_ids: dict[str, int]) -> 
         minutes = float(row.get("TotalMinutesWatched") or 0)
         if minutes < MIN_WATCH_MINUTES:
             continue
+        plays = int(row.get("PlayCount") or 0)
         key = (username, movie_id)
-        result[key] = result.get(key, 0) + minutes
+        total_minutes, total_plays = result.get(key, (0.0, 0))
+        result[key] = (total_minutes + minutes, total_plays + plays)
     return result
 
 
@@ -295,23 +297,32 @@ def sync(
             inserted += 1
         print(f"  Inserted {inserted} new movies")
 
-        # Watch events
+        # Watch events. Completion is total minutes over runtime, capped at 1, not per play:
+        # PlayCount also counts partial restarts, which would make a full watch look unfinished.
+        runtimes = {m.id: m.runtime for m in movies}
         we_inserted = 0
-        for (username, movie_id), _minutes in watch_map.items():
+        we_updated = 0
+        for (username, movie_id), (minutes, plays) in watch_map.items():
             user_id = username_to_id.get(username)
             if user_id is None:
                 continue
-            exists = conn.execute(
-                "SELECT 1 FROM watch_events WHERE user_id = ? AND movie_id = ?",
-                (user_id, movie_id),
-            ).fetchone()
-            if not exists:
+            completion = min(1.0, minutes / runtimes[movie_id])
+            play_count = max(1, plays)
+            updated = conn.execute(
+                "UPDATE watch_events SET completion = ?, play_count = ?"
+                " WHERE user_id = ? AND movie_id = ?",
+                (completion, play_count, user_id, movie_id),
+            ).rowcount
+            if updated:
+                we_updated += 1
+            else:
                 conn.execute(
-                    "INSERT INTO watch_events (user_id, movie_id) VALUES (?, ?)",
-                    (user_id, movie_id),
+                    "INSERT INTO watch_events (user_id, movie_id, completion, play_count)"
+                    " VALUES (?, ?, ?, ?)",
+                    (user_id, movie_id, completion, play_count),
                 )
                 we_inserted += 1
-        print(f"  Inserted {we_inserted} watch events")
+        print(f"  Inserted {we_inserted} watch events, updated {we_updated}")
 
     conn.close()
     print("Sync complete.")
