@@ -1,12 +1,14 @@
 import socket
 import sqlite3
-from datetime import datetime, timezone
+from dataclasses import fields
+from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import pytest
 
-from app.db import connect, decode_vector, insert_movie, store_vector
-from app.recommend import RecommendError, rank, recommend
+from app.db import WATCH_SIGNAL_COLUMNS, connect, decode_vector, insert_movie, store_vector
+from app.recommend import RecommendError, _watch_events, rank, recommend
+from app.taste import WatchEvent, build_base_taste_vector
 from app.vectors import FULL_DIMENSION, VECTOR_VERSION, Movie
 
 
@@ -26,20 +28,27 @@ def _padded(*values: float) -> np.ndarray:
     return vector
 
 
-def test_recommend_scores_unwatched_movies_against_the_mean_of_watched_vectors():
-    vectors = {
-        1: _padded(1.0, 0.0, 0.0),
-        2: _padded(3.0, 2.0, 0.0),
-        3: _padded(0.0, 1.0, 0.0),  # taste (2, 1, 0) . v = 1
-        4: _padded(1.0, 0.0, 1.0),  # 2
-        5: _padded(0.0, 0.0, 5.0),  # 0
-    }
+SMALL_LIBRARY = {
+    1: _padded(1.0, 0.0, 0.0),
+    2: _padded(3.0, 2.0, 0.0),
+    3: _padded(0.0, 1.0, 0.0),  # mean taste (2, 1, 0) . v = 1
+    4: _padded(1.0, 0.0, 1.0),  # 2
+    5: _padded(0.0, 0.0, 5.0),  # 0
+}
+
+
+def _small_library_db() -> tuple[sqlite3.Connection, int]:
     conn = connect(":memory:")
-    for movie_id, vector in vectors.items():
+    for movie_id, vector in SMALL_LIBRARY.items():
         movie = Movie(movie_id, f"Movie {movie_id}", 2000, (), 100, "en", "US", "PG", 7.0, "", ())
         insert_movie(conn, movie)
         store_vector(conn, movie_id, VECTOR_VERSION, vector)
     user_id = conn.execute("INSERT INTO users (name) VALUES ('dana')").lastrowid
+    return conn, user_id
+
+
+def test_recommend_scores_unwatched_movies_against_the_mean_of_watched_vectors():
+    conn, user_id = _small_library_db()
     conn.executemany(
         "INSERT INTO watch_events (user_id, movie_id) VALUES (?, ?)", [(user_id, 1), (user_id, 2)]
     )
@@ -173,3 +182,46 @@ def test_connect_adds_taste_signal_columns_to_an_existing_database(tmp_path):
         "SELECT user_id, movie_id, completion, play_count, favourite, not_interested, watched_at"
         " FROM watch_events"
     ).fetchall() == [(1, 2, 1.0, 1, 0, 0, None)]
+
+
+def test_recommend_ranks_and_stores_the_weighted_taste_vector():
+    conn, user_id = _small_library_db()
+    a_year_ago = NOW - timedelta(days=360)
+    conn.executemany(
+        "INSERT INTO watch_events"
+        " (user_id, movie_id, completion, play_count, favourite, not_interested, watched_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [
+            (user_id, 1, 0.8, 3, 1, 0, a_year_ago.isoformat()),
+            (user_id, 2, 0.1, 1, 0, 0, None),
+            (user_id, 5, 1.0, 1, 0, 1, None),
+        ],
+    )
+    expected = build_base_taste_vector(
+        [
+            WatchEvent(1, completion=0.8, play_count=3, favourite=True, watched_at=a_year_ago),
+            WatchEvent(2, completion=0.1),
+            WatchEvent(5, not_interested=True),
+        ],
+        SMALL_LIBRARY,
+        NOW,
+    )
+    mean = np.mean([SMALL_LIBRARY[1], SMALL_LIBRARY[2], SMALL_LIBRARY[5]], axis=0)
+    assert not np.allclose(expected, mean)
+
+    results = recommend(conn, "dana", top_n=2, now=NOW)
+
+    assert decode_vector(_stored_taste(conn, "dana")[2]).tobytes() == expected.tobytes()
+    assert [(r.movie_id, r.score) for r in results] == [
+        (3, pytest.approx(float(SMALL_LIBRARY[3] @ expected))),
+        (4, pytest.approx(float(SMALL_LIBRARY[4] @ expected))),
+    ]
+
+
+def test_watch_signal_columns_and_their_defaults_match_watch_event():
+    assert set(WATCH_SIGNAL_COLUMNS) == {f.name for f in fields(WatchEvent)} - {"movie_id"}
+
+    conn, user_id = _small_library_db()
+    conn.execute("INSERT INTO watch_events (user_id, movie_id) VALUES (?, 1)", (user_id,))
+
+    assert _watch_events(conn, user_id) == [WatchEvent(movie_id=1)]
