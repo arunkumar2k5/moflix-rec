@@ -53,7 +53,10 @@ class Runtime(_Strict):
         return self
 
 
-Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+MAX_TEXT_LENGTH = 200
+Text = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_TEXT_LENGTH)
+]
 LanguageCode = Annotated[str, StringConstraints(pattern=r"^[a-z]{2}$")]  # ISO 639-1
 Weight = Annotated[float, Field(ge=-1.0, le=1.0)]
 
@@ -88,11 +91,12 @@ class Intent(_Strict):
 
 
 def _toward(title: str, titles: Mapping[str, np.ndarray], scale: float) -> np.ndarray:
-    """`scale` times the movie's vector, shrunk so its largest component is `scale` at most."""
+    """`scale` times the movie's vector, shrunk so its largest component is `scale` at most.
+
+    A title outside the library contributes nothing.
+    """
     vector = titles.get(title.casefold())
-    if vector is None:
-        raise ValueError(f"unknown movie: {title}")
-    peak = np.abs(vector).max()
+    peak = 0.0 if vector is None else np.abs(vector).max()
     return np.zeros(FULL_DIMENSION) if peak == 0 else vector * (scale / peak)
 
 
@@ -119,8 +123,10 @@ def apply_intent(
 ) -> tuple[np.ndarray, Constraints]:
     """The session vector moved by the intent, and the hard filters it asks for.
 
-    `movie_index` maps titles to movie vectors and is looked up case-insensitively. Every
-    component of the session vector moves by `max_delta` at most; the input is not modified.
+    `movie_index` maps titles to movie vectors and is looked up case-insensitively; titles it
+    lacks (a misparse, or a film outside the library) are ignored so the rest of the intent still
+    applies. Every component of the session vector moves by `max_delta` at most; the input is
+    not modified.
     """
     if max_delta <= 0:
         raise ValueError(f"max_delta must be positive, got {max_delta}")

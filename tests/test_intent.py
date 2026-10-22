@@ -107,9 +107,41 @@ def test_unlike_and_a_disliked_reaction_lower_the_blended_cosine(movie_index, ba
         assert _cosine(blend(base, session), alien) < before
 
 
-def test_a_reference_to_a_movie_outside_the_index_is_an_error(movie_index):
-    with pytest.raises(ValueError, match="unknown movie: Nope"):
-        apply_intent(ZERO, Intent(similar_to={"Nope"}), movie_index)
+def test_titles_outside_the_index_are_ignored_and_the_rest_still_applies(movie_index):
+    intent = Intent.model_validate(
+        {
+            "genre_adjust": {"Horror": 1.0},
+            "era": {"from": 1990, "to": 1999},
+            "similar_to": ["Dances"],
+            "unlike": ["Nope"],
+            "reaction": {"title": "Nope", "liked": True},
+        }
+    )
+
+    session, constraints = apply_intent(ZERO, intent, movie_index)
+
+    expected, _ = apply_intent(ZERO, Intent(genre_adjust={"Horror": 1.0}), movie_index)
+    assert np.array_equal(session, expected)
+    assert constraints.year_range == (1990, 1999)
+
+
+@pytest.mark.parametrize(
+    ("mood", "raised", "lowered"), [("lighter", "Comedy", "Horror"), ("darker", "Horror", "Comedy")]
+)
+def test_a_mood_raises_its_genres_and_lowers_their_opposites(movie_index, mood, raised, lowered):
+    session, _ = apply_intent(ZERO, Intent(mood_pace=mood), movie_index)
+
+    assert session[_genre_slot(raised)] > 0 > session[_genre_slot(lowered)]
+
+
+def test_a_reaction_moves_less_than_asking_for_similar(movie_index):
+    similar, _ = apply_intent(ZERO, Intent(similar_to={"Alien"}), movie_index)
+    reaction, _ = apply_intent(
+        ZERO, Intent(reaction={"title": "Alien", "liked": True}), movie_index
+    )
+
+    assert 0 < np.linalg.norm(reaction) < np.linalg.norm(similar)
+    assert _cosine(reaction, similar) == pytest.approx(1.0)
 
 
 def test_a_session_vector_of_the_wrong_size_is_an_error(movie_index):

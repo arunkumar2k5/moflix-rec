@@ -6,7 +6,7 @@ the picks unchanged rather than guessing.
 
 import re
 
-from app.intent import Era, FilterSet, HardFilters, Intent, MoodPace, Runtime
+from app.intent import MAX_TEXT_LENGTH, Era, FilterSet, HardFilters, Intent, MoodPace, Runtime
 from app.vectors import Genre
 
 GENRE_WORDS: dict[str, Genre] = {
@@ -32,7 +32,7 @@ GENRE_WORDS: dict[str, Genre] = {
 GENRE_PATTERN = re.compile(
     r"\b(?:" + "|".join(f"(?P<g{i}>{w})" for i, w in enumerate(GENRE_WORDS)) + r")\b"
 )
-EXCLUDE_BEFORE = re.compile(r"\b(?:no|without)\s+(?:more\s+)?$")
+EXCLUDE_BEFORE = re.compile(r"\b(?:(?:no|without)(?:\s+more)?|not\s+(?:another|more))\s+$")
 REQUIRE_BEFORE = re.compile(r"\bonly\s+$")
 LESS_BEFORE = re.compile(
     r"\b(?:less|fewer|not|not into|hate|dislike|don't like|do not like|tired of|sick of)\s+$"
@@ -41,12 +41,13 @@ LESS_BEFORE = re.compile(
 DECADE = re.compile(r"\b(19|20)?(\d)0'?s\b")
 SHORTER_THAN = re.compile(
     r"\b(?:under|less than|shorter than|at most|no more than|no longer than|nothing over"
-    r"|nothing longer than)\s+(\d+(?:\.\d+)?)\s*(h|hrs?|hours?|m|mins?|minutes?)\b"
+    r"|nothing longer than)\s+(\d{1,4}(?:\.\d{1,2})?)\s*(h|hrs?|hours?|m|mins?|minutes?)\b"
 )
 NOT_ANOTHER = re.compile(r"\b(?:not|no)\s+(?:another|more)\s+([a-z][\w-]*)")
-NOT_A_TERM = re.compile(rf"(?:{'|'.join(GENRE_WORDS)})s?|movies?|films?|of")
+NOT_A_TERM = re.compile(rf"(?:{'|'.join(GENRE_WORDS)})s?|movies?|films?|of|than")
 SIMILAR_TO = re.compile(r"\b(?:similar to|something like|movies? like)\s+([^,.;!?]+)", re.I)
-TITLE_END = re.compile(r"\s+(?:but|and|with|please)\b.*$", re.I)
+# Titles often contain "and"/"with" ("Dances with Wolves"), so only these words end one.
+TITLE_END = re.compile(r"\s+(?:but|please)\b.*$", re.I)
 
 LANGUAGE_WORDS = {
     "english": "en",
@@ -113,20 +114,27 @@ def _mood_pace(text: str) -> MoodPace | None:
     return None
 
 
+def _fits(text: str) -> bool:
+    """Whether the schema accepts `text`; anything longer is a misparse, not a request."""
+    return 0 < len(text) <= MAX_TEXT_LENGTH
+
+
 def simple_parse(text: str) -> Intent:
     lowered = text.lower()
     adjust, excluded_genres, required_genres = _genres(lowered)
     excluded_terms = {
-        word for word in NOT_ANOTHER.findall(lowered) if not NOT_A_TERM.fullmatch(word)
+        word
+        for word in NOT_ANOTHER.findall(lowered)
+        if not NOT_A_TERM.fullmatch(word) and _fits(word)
     }
-    similar_to = {TITLE_END.sub("", match.group(1)).strip() for match in SIMILAR_TO.finditer(text)}
+    titles = (TITLE_END.sub("", match.group(1)).strip() for match in SIMILAR_TO.finditer(text))
     return Intent(
         genre_adjust=adjust,
         era=_era(lowered),
         runtime=_runtime(lowered),
         language=frozenset(LANGUAGE_WORDS[word] for word in LANGUAGE_PATTERN.findall(lowered)),
         mood_pace=_mood_pace(lowered),
-        similar_to=frozenset(title for title in similar_to if title),
+        similar_to=frozenset(title for title in titles if _fits(title)),
         hard_filters=HardFilters(
             exclude=FilterSet(genres=frozenset(excluded_genres), terms=frozenset(excluded_terms)),
             require=FilterSet(genres=frozenset(required_genres)),
