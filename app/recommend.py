@@ -42,6 +42,7 @@ class UserContext:
     taste: np.ndarray
     excluded_ids: frozenset[int]  # every movie the user has an event for, liked or not
     liked: tuple[Candidate, ...]  # only this user's positively weighted movies, named in reasons
+    passed: tuple[Candidate, ...] = ()  # this user's other movies, named only as passed on
 
 
 @dataclass(frozen=True)
@@ -115,7 +116,7 @@ def _passes(movie: Movie, constraints: Constraints) -> bool:
     return (
         (c.min_runtime is None or movie.runtime >= c.min_runtime)
         and (c.max_runtime is None or movie.runtime <= c.max_runtime)
-        and (c.languages is None or movie.language in c.languages)
+        and (not c.languages or movie.language in c.languages)
         and (c.min_rating is None or movie.rating >= c.min_rating)
         and (c.year_range is None or c.year_range[0] <= movie.year <= c.year_range[1])
         and c.required_genres.issubset(movie.genres)
@@ -190,6 +191,10 @@ def _reason(candidate: Candidate, user_ctx: UserContext) -> str:
         return f"Similar to {liked.title}, which you enjoyed"
     if candidate.movie.genres:
         return f"A {candidate.movie.genres[0]} pick close to your overall taste"
+    if user_ctx.liked:
+        return f"Picked for someone who enjoyed {user_ctx.liked[0].movie.title}"
+    if user_ctx.passed:
+        return f"A change from {user_ctx.passed[0].movie.title}, which you passed on"
     return "Close to your overall viewing taste"
 
 
@@ -254,9 +259,11 @@ def recommend(
     movies = {movie.id: movie for movie in load_movies(conn)}
     candidates = {movie_id: Candidate(movies[movie_id], v) for movie_id, v in vectors.items()}
     liked_ids = {e.movie_id for e in events if event_weight(e, now, DEFAULT_PARAMS) > 0}
+    excluded_ids = frozenset(event.movie_id for event in events)
     user_ctx = UserContext(
         taste=taste,
-        excluded_ids=frozenset(event.movie_id for event in events),
+        excluded_ids=excluded_ids,
         liked=tuple(candidates[movie_id] for movie_id in sorted(liked_ids)),
+        passed=tuple(candidates[movie_id] for movie_id in sorted(excluded_ids - liked_ids)),
     )
     return rank(user_ctx, list(candidates.values()), constraints, params)

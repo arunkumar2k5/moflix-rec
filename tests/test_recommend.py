@@ -96,8 +96,10 @@ def _candidate(movie_id: int, vector, title: str = "", **metadata) -> Candidate:
     return Candidate(movie, np.asarray(vector, dtype=float))
 
 
-def _context(taste, excluded=(), liked=()) -> UserContext:
-    return UserContext(np.asarray(taste, dtype=float), frozenset(excluded), tuple(liked))
+def _context(taste, excluded=(), liked=(), passed=()) -> UserContext:
+    return UserContext(
+        np.asarray(taste, dtype=float), frozenset(excluded), tuple(liked), tuple(passed)
+    )
 
 
 RELEVANCE_ONLY = RankParams(mmr_lambda=1.0)
@@ -220,6 +222,53 @@ def test_reason_falls_back_to_the_movies_genre_without_taste_or_liked_signal():
     assert result.reason == "A Thriller pick close to your overall taste"
 
 
+def test_reason_for_a_genreless_movie_names_a_liked_title_even_when_it_is_not_similar():
+    liked = _candidate(9, _padded(0.0, 1.0), title="Heat")
+    candidate = _candidate(1, _padded(1.0))
+
+    [result] = rank(_context(_padded(1.0), liked=[liked]), [candidate], Constraints(), RankParams())
+
+    assert result.reason == "Picked for someone who enjoyed Heat"
+
+
+def test_reason_for_a_genreless_movie_names_a_passed_title_without_liked_ones():
+    passed = _candidate(9, _padded(0.0, 1.0), title="Heat")
+    candidate = _candidate(1, _padded(1.0))
+
+    [result] = rank(
+        _context(_padded(1.0), passed=[passed]), [candidate], Constraints(), RankParams()
+    )
+
+    assert result.reason == "A change from Heat, which you passed on"
+
+
+def _insert_events(conn, user_id, *events: tuple[int, int]) -> None:
+    conn.executemany(
+        "INSERT INTO watch_events (user_id, movie_id, not_interested) VALUES (?, ?, ?)",
+        [(user_id, movie_id, not_interested) for movie_id, not_interested in events],
+    )
+
+
+def test_recommend_never_calls_a_not_interested_movie_enjoyed():
+    conn, user_id = _small_library_db()
+    _insert_events(conn, user_id, (2, 0), (5, 1))  # movie 5 is the closest match to movie 4
+
+    results = recommend(conn, "dana", RankParams(top_n=3), now=NOW)
+
+    assert {r.movie_id for r in results} == {1, 3, 4}
+    assert all(r.reason == "Similar to Movie 2, which you enjoyed" for r in results)
+
+
+def test_recommend_names_a_passed_title_for_genreless_movies_when_nothing_is_liked():
+    conn, user_id = _small_library_db()
+    _insert_events(conn, user_id, (5, 1))
+
+    results = recommend(conn, "dana", RankParams(top_n=4), now=NOW)
+
+    assert len(results) == 4
+    assert all(r.reason == "A change from Movie 5, which you passed on" for r in results)
+
+
 def _movies_by_id(library) -> dict:
     return {movie["id"]: movie for movie in library["movies"]}
 
@@ -241,6 +290,14 @@ def test_year_range_constraint_keeps_only_movies_inside_it(seeded_db):
 
     assert results
     assert all(1990 <= r.year <= 1999 for r in results)
+
+
+def test_an_empty_language_set_leaves_languages_unconstrained():
+    candidates = [_candidate(1, [1.0], language="en"), _candidate(2, [2.0], language="fr")]
+
+    results = rank(_context([1.0]), candidates, Constraints(languages=frozenset()), RankParams())
+
+    assert {r.movie_id for r in results} == {1, 2}
 
 
 def test_language_rating_and_genre_constraints_all_apply(seeded_db, library):
