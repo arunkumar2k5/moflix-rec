@@ -6,7 +6,7 @@ from pathlib import Path
 from tests.conftest import FIXTURE_PATH
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-LINE = re.compile(r"^.+ \(\d{4}\) -?\d+\.\d{4}$")
+LINE = re.compile(r"^.+ \(\d{4}\) -?\d+\.\d{4} \| .{10,}$")
 
 
 def run_cli(*args: str, timeout: int = 60) -> subprocess.CompletedProcess:
@@ -31,6 +31,34 @@ def test_seed_then_recommend_prints_top_n_lines(tmp_path):
     lines = result.stdout.splitlines()
     assert len(lines) == 3
     assert all(LINE.match(line) for line in lines)
+
+    tuned = run_cli(
+        "recommend",
+        "--db",
+        db,
+        "--user",
+        "alice",
+        "--top",
+        "3",
+        "--similarity",
+        "cosine",
+        "--mmr-lambda",
+        "1.0",
+    )
+
+    assert tuned.returncode == 0, tuned.stderr
+    tuned_lines = tuned.stdout.splitlines()
+    assert len(tuned_lines) == 3
+    assert all(LINE.match(line) for line in tuned_lines)
+
+
+def test_recommend_rejects_mmr_lambda_outside_unit_interval(tmp_path):
+    result = run_cli(
+        "recommend", "--db", str(tmp_path / "x.db"), "--user", "a", "--mmr-lambda", "2"
+    )
+
+    assert result.returncode == 2
+    assert "must be between 0 and 1" in result.stderr
 
 
 def test_recommend_for_unknown_user_exits_nonzero(tmp_path):
