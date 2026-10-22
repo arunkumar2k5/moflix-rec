@@ -5,6 +5,7 @@ description = "Self-hosted chat-based movie recommender"
 requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.26",
+    "pydantic>=2.11",
     "sentence-transformers>=3.0",
     "requests>=2.31",
     "fastapi>=0.110",

@@ -56,6 +56,9 @@ class Constraints:
     year_range: tuple[int, int] | None = None
     required_genres: frozenset[str] = frozenset()  # a movie must carry all of them
     excluded_genres: frozenset[str] = frozenset()
+    # Terms match case-insensitively anywhere in the title or one of the keywords.
+    required_terms: frozenset[str] = frozenset()  # a movie must mention all of them
+    excluded_terms: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -121,7 +124,14 @@ def _passes(movie: Movie, constraints: Constraints) -> bool:
         and (c.year_range is None or c.year_range[0] <= movie.year <= c.year_range[1])
         and c.required_genres.issubset(movie.genres)
         and c.excluded_genres.isdisjoint(movie.genres)
+        and all(_mentions(movie, term) for term in c.required_terms)
+        and not any(_mentions(movie, term) for term in c.excluded_terms)
     )
+
+
+def _mentions(movie: Movie, term: str) -> bool:
+    needle = term.casefold()
+    return any(needle in text.casefold() for text in (movie.title, *movie.keywords))
 
 
 def _unit_rows(matrix: np.ndarray) -> np.ndarray:
