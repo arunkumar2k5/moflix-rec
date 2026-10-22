@@ -91,15 +91,16 @@ def _add_user(db: str, user: str, role: Role) -> int:
         return 1
     conn = connect(db)
     try:
-        set_password(conn, user, password, role)
+        created = set_password(conn, user, password, role)
     finally:
         conn.close()
+    print(f"{'created' if created else 'updated'} {role} {user!r}")
     return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    if args.command == "recommend" and not Path(args.db).is_file():
+    if args.command in ("recommend", "add-user") and not Path(args.db).is_file():
         print(f"error: database not found: {args.db}", file=sys.stderr)
         return 1
     if args.command == "sync":

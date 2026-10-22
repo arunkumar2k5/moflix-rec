@@ -100,6 +100,7 @@ def test_add_user_gives_an_existing_user_a_password(tmp_path):
     )
 
     assert result.returncode == 0, result.stderr
+    assert result.stdout == "updated user 'alice'\n"
     assert "s3cret-pass" not in result.stdout + result.stderr
     conn = connect(db)
     row = conn.execute("SELECT id, role, password_hash FROM users WHERE name = 'alice'").fetchone()
@@ -108,8 +109,44 @@ def test_add_user_gives_an_existing_user_a_password(tmp_path):
     assert verify_password("s3cret-pass", row[2])
 
 
+def test_add_user_reports_a_new_account(tmp_path):
+    db = tmp_path / "cli.db"
+    connect(db).close()
+
+    result = subprocess.run(
+        [sys.executable, "-m", "app.cli", "add-user", "--db", str(db), "--user", "root"]
+        + ["--role", "admin"],
+        cwd=REPO_ROOT,
+        input="s3cret-pass\n",
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "created admin 'root'\n"
+
+
+def test_add_user_requires_an_existing_database(tmp_path):
+    db = tmp_path / "typo.db"
+
+    result = subprocess.run(
+        [sys.executable, "-m", "app.cli", "add-user", "--db", str(db), "--user", "bob"],
+        cwd=REPO_ROOT,
+        input="s3cret-pass\n",
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 1
+    assert "database not found" in result.stderr
+    assert not db.exists()
+
+
 def test_add_user_rejects_an_empty_password(tmp_path):
     db = tmp_path / "cli.db"
+    connect(db).close()
 
     result = subprocess.run(
         [sys.executable, "-m", "app.cli", "add-user", "--db", str(db), "--user", "bob"],
@@ -122,4 +159,6 @@ def test_add_user_rejects_an_empty_password(tmp_path):
 
     assert result.returncode == 1
     assert "must not be empty" in result.stderr
-    assert not db.exists()
+    conn = connect(db)
+    assert conn.execute("SELECT COUNT(*) FROM users").fetchone() == (0,)
+    conn.close()

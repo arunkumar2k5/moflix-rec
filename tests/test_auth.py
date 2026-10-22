@@ -1,4 +1,6 @@
+import hashlib
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from typing import Annotated
 
@@ -108,6 +110,23 @@ def test_sixth_failed_login_within_window_is_rate_limited(client, db_path):
     assert login(client).status_code == 200
 
 
+def test_unknown_username_failures_are_rate_limited(client):
+    for _ in range(5):
+        assert login(client, password="wrong", username="nobody").status_code == 401
+
+    assert login(client, password="wrong", username="nobody").status_code == 429
+
+
+def test_session_is_stored_by_token_digest(client, db_path):
+    login(client)
+    token = client.cookies[SESSION_COOKIE]
+    conn = connect(db_path)
+    stored = conn.execute("SELECT token_hash FROM sessions").fetchall()
+    conn.close()
+
+    assert stored == [(hashlib.sha256(token.encode()).hexdigest(),)]
+
+
 @pytest.mark.parametrize("method", ["get", "post"])
 @pytest.mark.parametrize("path", ["/auth/register", "/signup"])
 def test_no_sign_up_route(client, method, path):
@@ -149,4 +168,30 @@ def test_connect_adds_credential_columns_to_existing_users(tmp_path):
     assert conn.execute("SELECT id, name, password_hash, role FROM users").fetchall() == [
         (1, "alice", None, "user")
     ]
+    conn.close()
+
+
+def test_concurrent_failed_logins_cannot_exceed_the_limit(client):
+    with ThreadPoolExecutor(max_workers=20) as pool:
+        statuses = list(pool.map(lambda _: login(client, password="wrong").status_code, range(20)))
+
+    assert statuses.count(401) == 5
+    assert statuses.count(429) == 15
+
+
+def test_login_prunes_stale_failures_and_expired_sessions(client, db_path):
+    login(client)
+    login(client, password="wrong", username="nobody")
+    conn = connect(db_path)
+    with conn:
+        conn.execute("UPDATE sessions SET expires_at = ?", (utc_now().isoformat(),))
+        stale = (utc_now() - timedelta(minutes=16)).isoformat()
+        conn.execute("UPDATE login_failures SET failed_at = ?", (stale,))
+    conn.close()
+
+    login(client)
+
+    conn = connect(db_path)
+    assert conn.execute("SELECT COUNT(*) FROM sessions").fetchone() == (1,)
+    assert conn.execute("SELECT COUNT(*) FROM login_failures").fetchone() == (0,)
     conn.close()

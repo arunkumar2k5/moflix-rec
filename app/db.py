@@ -4,9 +4,11 @@ import json
 import sqlite3
 from datetime import datetime
 from pathlib import Path
+from typing import get_args
 
 import numpy as np
 
+from app.auth import Role
 from app.vectors import Movie
 
 SCHEMA = """
@@ -76,7 +78,8 @@ WATCH_SIGNAL_COLUMNS = {
 # A NULL password_hash means the account cannot log in until an admin runs `add-user`.
 USER_AUTH_COLUMNS = {
     "password_hash": "TEXT",
-    "role": "TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('user', 'admin'))",
+    "role": "TEXT NOT NULL DEFAULT 'user'"
+    f" CHECK (role IN ({', '.join(repr(role) for role in get_args(Role))}))",
 }
 
 # Vectors are stored as raw little-endian float64 bytes.

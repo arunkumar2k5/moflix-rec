@@ -62,12 +62,14 @@ def _b64(data: bytes) -> str:
 _DUMMY_HASH = hash_password(secrets.token_urlsafe(16))
 
 
-def set_password(conn: sqlite3.Connection, name: str, password: str, role: Role) -> None:
+def set_password(conn: sqlite3.Connection, name: str, password: str, role: Role) -> bool:
     """Create the account, or give an existing (e.g. synced) user a password and role.
 
     Ends the user's existing sessions so a reset password locks out whoever held the old one.
+    Returns whether the account was newly created.
     """
     with conn:
+        existed = conn.execute("SELECT 1 FROM users WHERE name = ?", (name,)).fetchone()
         conn.execute(
             "INSERT INTO users (name, password_hash, role) VALUES (?, ?, ?)"
             " ON CONFLICT (name) DO UPDATE SET"
@@ -77,41 +79,57 @@ def set_password(conn: sqlite3.Connection, name: str, password: str, role: Role)
         conn.execute(
             "DELETE FROM sessions WHERE user_id = (SELECT id FROM users WHERE name = ?)", (name,)
         )
+    return existed is None
 
 
-def login_rate_limited(conn: sqlite3.Connection, username: str, now: datetime) -> bool:
-    (failures,) = conn.execute(
-        "SELECT COUNT(*) FROM login_failures WHERE username = ? AND failed_at > ?",
-        (username, (now - FAILED_LOGIN_WINDOW).isoformat()),
-    ).fetchone()
-    return failures >= MAX_FAILED_LOGINS
+class LoginRateLimited(Exception):
+    """The username has used up its failed-login allowance for the current window."""
 
 
 def authenticate(
     conn: sqlite3.Connection, username: str, password: str, now: datetime
 ) -> User | None:
-    """Return the user for valid credentials; otherwise record a failed attempt."""
+    """Return the user for valid credentials, or None for invalid ones.
+
+    Each attempt is recorded as a failure before the password is checked, in the same write
+    transaction as the count, so concurrent guesses cannot all pass the limit check. Success
+    clears the username's failures.
+    """
+    cutoff = (now - FAILED_LOGIN_WINDOW).isoformat()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute("DELETE FROM login_failures WHERE failed_at <= ?", (cutoff,))
+        (failures,) = conn.execute(
+            "SELECT COUNT(*) FROM login_failures WHERE username = ?", (username,)
+        ).fetchone()
+        if failures >= MAX_FAILED_LOGINS:
+            raise LoginRateLimited(username)
+        conn.execute(
+            "INSERT INTO login_failures (username, failed_at) VALUES (?, ?)",
+            (username, now.isoformat()),
+        )
+    except BaseException:
+        conn.rollback()
+        raise
+    conn.commit()
+
     row = conn.execute(
         "SELECT id, name, role, password_hash FROM users WHERE name = ?", (username,)
     ).fetchone()
     stored = row[3] if row else None
     password_ok = verify_password(password, stored or _DUMMY_HASH)
-    if stored and password_ok:
-        with conn:
-            conn.execute("DELETE FROM login_failures WHERE username = ?", (username,))
-        return User(id=row[0], name=row[1], role=row[2])
+    if not (stored and password_ok):
+        return None
     with conn:
-        conn.execute(
-            "INSERT INTO login_failures (username, failed_at) VALUES (?, ?)",
-            (username, now.isoformat()),
-        )
-    return None
+        conn.execute("DELETE FROM login_failures WHERE username = ?", (username,))
+    return User(id=row[0], name=row[1], role=row[2])
 
 
 def create_session(conn: sqlite3.Connection, user: User, now: datetime) -> Session:
     token = secrets.token_urlsafe(32)
     expires_at = now + SESSION_LIFETIME
     with conn:
+        conn.execute("DELETE FROM sessions WHERE expires_at <= ?", (now.isoformat(),))
         conn.execute(
             "INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)",
             (_token_hash(token), user.id, expires_at.isoformat()),

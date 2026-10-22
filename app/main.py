@@ -14,12 +14,12 @@ from pydantic import BaseModel
 
 from app.auth import (
     SESSION_LIFETIME,
+    LoginRateLimited,
     Role,
     User,
     authenticate,
     create_session,
     end_session,
-    login_rate_limited,
     session_user,
     utc_now,
 )
@@ -65,9 +65,12 @@ def create_app(db_path: str | Path) -> FastAPI:
     @app.post("/auth/login")
     def login(credentials: Credentials, conn: Db, response: Response) -> LoggedIn:
         now = utc_now()
-        if login_rate_limited(conn, credentials.username, now):
-            raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "too many failed logins")
-        user = authenticate(conn, credentials.username, credentials.password, now)
+        try:
+            user = authenticate(conn, credentials.username, credentials.password, now)
+        except LoginRateLimited:
+            raise HTTPException(
+                status.HTTP_429_TOO_MANY_REQUESTS, "too many failed logins"
+            ) from None
         if user is None:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid username or password")
         session = create_session(conn, user, now)
