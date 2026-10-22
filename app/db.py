@@ -132,3 +132,42 @@ def store_taste_vector(
 
 def decode_vector(blob: bytes) -> np.ndarray:
     return np.frombuffer(blob, dtype=VECTOR_DTYPE)
+
+
+def load_movies(conn: sqlite3.Connection) -> list[Movie]:
+    rows = conn.execute(
+        "SELECT id, title, year, genres, runtime, language, country, certification, rating,"
+        ' director, "cast", overview, keywords FROM movies ORDER BY id'
+    )
+    return [
+        Movie(
+            id=movie_id,
+            title=title,
+            year=year,
+            genres=tuple(json.loads(genres)),
+            runtime=runtime,
+            language=language,
+            country=country,
+            certification=certification,
+            rating=rating,
+            director=director,
+            cast=tuple(json.loads(cast)),
+            overview=overview,
+            keywords=tuple(json.loads(keywords)),
+        )
+        for (
+            movie_id,
+            title,
+            year,
+            genres,
+            runtime,
+            language,
+            country,
+            certification,
+            rating,
+            director,
+            cast,
+            overview,
+            keywords,
+        ) in rows
+    ]

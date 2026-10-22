@@ -4,9 +4,10 @@ import argparse
 import os
 import sys
 from pathlib import Path
+from typing import get_args
 
 from app.db import connect
-from app.recommend import RecommendError, recommend
+from app.recommend import DEFAULT_RANK_PARAMS, RankParams, RecommendError, Similarity, recommend
 from app.seed import SeedError, load_fixture, seed
 
 
@@ -14,6 +15,13 @@ def _positive_int(value: str) -> int:
     number = int(value)
     if number < 1:
         raise argparse.ArgumentTypeError("must be at least 1")
+    return number
+
+
+def _unit_float(value: str) -> float:
+    number = float(value)
+    if not 0.0 <= number <= 1.0:
+        raise argparse.ArgumentTypeError("must be between 0 and 1")
     return number
 
 
@@ -29,6 +37,15 @@ def _parser() -> argparse.ArgumentParser:
     rec_cmd.add_argument("--db", required=True)
     rec_cmd.add_argument("--user", required=True)
     rec_cmd.add_argument("--top", type=_positive_int, default=10)
+    rec_cmd.add_argument(
+        "--similarity", choices=get_args(Similarity), default=DEFAULT_RANK_PARAMS.similarity
+    )
+    rec_cmd.add_argument(
+        "--mmr-lambda",
+        type=_unit_float,
+        default=DEFAULT_RANK_PARAMS.mmr_lambda,
+        help="1 ranks by relevance alone, lower values favour diverse picks",
+    )
 
     sync_cmd = commands.add_parser("sync", help="populate DB from Emby CSV exports + TMDB")
     sync_cmd.add_argument("--db", required=True)
@@ -66,8 +83,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "seed":
             seed(conn, load_fixture(args.fixture))
         else:
-            for rec in recommend(conn, args.user, args.top):
-                print(f"{rec.title} ({rec.year}) {rec.score:.4f}")
+            params = RankParams(
+                similarity=args.similarity, mmr_lambda=args.mmr_lambda, top_n=args.top
+            )
+            for rec in recommend(conn, args.user, params):
+                print(f"{rec.title} ({rec.year}) {rec.score:.4f} | {rec.reason}")
     except (SeedError, RecommendError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
