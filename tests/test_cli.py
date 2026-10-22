@@ -3,6 +3,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from app.auth import verify_password
+from app.db import connect
 from tests.conftest import FIXTURE_PATH
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -78,4 +80,46 @@ def test_recommend_against_missing_db_reports_it_and_creates_nothing(tmp_path):
 
     assert result.returncode == 1
     assert "database not found" in result.stderr
+    assert not db.exists()
+
+
+def test_add_user_gives_an_existing_user_a_password(tmp_path):
+    db = tmp_path / "cli.db"
+    conn = connect(db)
+    with conn:
+        synced_id = conn.execute("INSERT INTO users (name) VALUES ('alice')").lastrowid
+    conn.close()
+
+    result = subprocess.run(
+        [sys.executable, "-m", "app.cli", "add-user", "--db", str(db), "--user", "alice"],
+        cwd=REPO_ROOT,
+        input="s3cret-pass\n",
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "s3cret-pass" not in result.stdout + result.stderr
+    conn = connect(db)
+    row = conn.execute("SELECT id, role, password_hash FROM users WHERE name = 'alice'").fetchone()
+    conn.close()
+    assert row[:2] == (synced_id, "user")
+    assert verify_password("s3cret-pass", row[2])
+
+
+def test_add_user_rejects_an_empty_password(tmp_path):
+    db = tmp_path / "cli.db"
+
+    result = subprocess.run(
+        [sys.executable, "-m", "app.cli", "add-user", "--db", str(db), "--user", "bob"],
+        cwd=REPO_ROOT,
+        input="\n",
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 1
+    assert "must not be empty" in result.stderr
     assert not db.exists()
