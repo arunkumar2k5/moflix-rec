@@ -135,39 +135,15 @@ def decode_vector(blob: bytes) -> np.ndarray:
 
 
 def load_movies(conn: sqlite3.Connection) -> list[Movie]:
-    rows = conn.execute(
+    cursor = conn.execute(
         "SELECT id, title, year, genres, runtime, language, country, certification, rating,"
         ' director, "cast", overview, keywords FROM movies ORDER BY id'
     )
-    return [
-        Movie(
-            id=movie_id,
-            title=title,
-            year=year,
-            genres=tuple(json.loads(genres)),
-            runtime=runtime,
-            language=language,
-            country=country,
-            certification=certification,
-            rating=rating,
-            director=director,
-            cast=tuple(json.loads(cast)),
-            overview=overview,
-            keywords=tuple(json.loads(keywords)),
-        )
-        for (
-            movie_id,
-            title,
-            year,
-            genres,
-            runtime,
-            language,
-            country,
-            certification,
-            rating,
-            director,
-            cast,
-            overview,
-            keywords,
-        ) in rows
-    ]
+    columns = [description[0] for description in cursor.description]
+    movies = []
+    for row in cursor:
+        fields = dict(zip(columns, row, strict=True))
+        for name in ("genres", "cast", "keywords"):
+            fields[name] = tuple(json.loads(fields[name]))
+        movies.append(Movie(**fields))
+    return movies
