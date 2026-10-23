@@ -19,6 +19,7 @@ from pathlib import Path
 
 import requests
 
+from app.auth import hash_password
 from app.db import connect, insert_movie, store_vector
 from app.vectors import (
     EMBEDDING_MODEL_NAME,
@@ -282,14 +283,24 @@ def sync(
     # Write to DB
     print(f"Writing to {db_path}...")
     conn = connect(str(db_path))
+    default_hash = hash_password("Test123")
+
     with conn:
-        # Users
+        # Users — insert new ones with the default password; leave existing passwords alone.
         username_to_id: dict[str, int] = {}
         for row in users_rows:
             name = row["UserName"].strip()
-            uid = conn.execute("INSERT OR IGNORE INTO users (name) VALUES (?)", (name,)).lastrowid
+            uid = conn.execute(
+                "INSERT OR IGNORE INTO users (name, password_hash) VALUES (?, ?)",
+                (name, default_hash),
+            ).lastrowid
             if uid == 0:  # already existed
                 uid = conn.execute("SELECT id FROM users WHERE name = ?", (name,)).fetchone()[0]
+                # Backfill default password for users with no password set yet.
+                conn.execute(
+                    "UPDATE users SET password_hash = ? WHERE id = ? AND password_hash IS NULL",
+                    (default_hash, uid),
+                )
             username_to_id[name] = uid
 
         # Movies + vectors — insert new, backfill poster_url on existing ones that lack it

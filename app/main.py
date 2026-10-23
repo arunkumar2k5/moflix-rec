@@ -20,8 +20,10 @@ from app.auth import (
     authenticate,
     create_session,
     end_session,
+    hash_password,
     session_user,
     utc_now,
+    verify_password,
 )
 from app.db import connect
 
@@ -36,6 +38,16 @@ class Credentials(BaseModel):
 class LoggedIn(BaseModel):
     username: str
     role: Role
+
+
+class UserInfo(BaseModel):
+    id: int
+    name: str
+
+
+class ChangePassword(BaseModel):
+    current_password: str
+    new_password: str
 
 
 def get_db(request: Request) -> Iterator[sqlite3.Connection]:
@@ -90,6 +102,33 @@ def create_app(db_path: str | Path) -> FastAPI:
         if token:
             end_session(conn, token)
         response.delete_cookie(SESSION_COOKIE, httponly=True, secure=True, samesite="lax")
+
+    @app.get("/auth/me")
+    def me(user: Annotated[User, Depends(current_user)]) -> LoggedIn:
+        return LoggedIn(username=user.name, role=user.role)
+
+    @app.post("/auth/change-password", status_code=status.HTTP_204_NO_CONTENT)
+    def change_password(
+        body: ChangePassword,
+        conn: Db,
+        user: Annotated[User, Depends(current_user)],
+    ) -> None:
+        row = conn.execute("SELECT password_hash FROM users WHERE id = ?", (user.id,)).fetchone()
+        if row is None or not verify_password(body.current_password, row[0] or ""):
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "current password is wrong")
+        if not body.new_password:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "new password is empty")
+        with conn:
+            conn.execute(
+                "UPDATE users SET password_hash = ? WHERE id = ?",
+                (hash_password(body.new_password), user.id),
+            )
+            conn.execute("DELETE FROM sessions WHERE user_id = ?", (user.id,))
+
+    @app.get("/api/users")
+    def list_users(conn: Db) -> list[UserInfo]:
+        rows = conn.execute("SELECT id, name FROM users ORDER BY name").fetchall()
+        return [UserInfo(id=row[0], name=row[1]) for row in rows]
 
     return app
 
