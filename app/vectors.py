@@ -64,6 +64,7 @@ class Movie:
     cast: Sequence[str]
     overview: str = ""
     keywords: Sequence[str] = field(default_factory=tuple)
+    poster_url: str = ""
 
 
 def _layout() -> dict[str, slice]:

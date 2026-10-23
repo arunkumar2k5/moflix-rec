@@ -139,6 +139,9 @@ def _certification(tmdb: dict) -> str:
     return ""
 
 
+TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/w500"
+
+
 def tmdb_to_movie(item_id: int, tmdb: dict) -> Movie:
     genres = [g["name"] for g in tmdb.get("genres", [])]
     runtime = int(tmdb.get("runtime") or 90)
@@ -154,6 +157,8 @@ def tmdb_to_movie(item_id: int, tmdb: dict) -> Movie:
     language = tmdb.get("original_language", "en") or "en"
     countries = tmdb.get("production_countries", [])
     country = countries[0]["iso_3166_1"] if countries else "US"
+    poster_path = tmdb.get("poster_path") or ""
+    poster_url = f"{TMDB_IMAGE_BASE}{poster_path}" if poster_path else ""
     return Movie(
         id=item_id,
         title=tmdb.get("title") or tmdb.get("original_title", "Unknown"),
@@ -168,6 +173,7 @@ def tmdb_to_movie(item_id: int, tmdb: dict) -> Movie:
         cast=cast,
         overview=tmdb.get("overview", ""),
         keywords=keywords,
+        poster_url=poster_url,
     )
 
 
@@ -286,16 +292,24 @@ def sync(
                 uid = conn.execute("SELECT id FROM users WHERE name = ?", (name,)).fetchone()[0]
             username_to_id[name] = uid
 
-        # Movies + vectors
-        existing_ids = {row[0] for row in conn.execute("SELECT id FROM movies").fetchall()}
+        # Movies + vectors — insert new, backfill poster_url on existing ones that lack it
+        existing = {
+            row[0]: row[1] for row in conn.execute("SELECT id, poster_url FROM movies").fetchall()
+        }
         inserted = 0
+        poster_updated = 0
         for movie, embedding in zip(movies, embeddings, strict=True):
-            if movie.id in existing_ids:
-                continue
-            insert_movie(conn, movie)
-            store_vector(conn, movie.id, VECTOR_VERSION, build_full_vector(movie, embedding))
-            inserted += 1
-        print(f"  Inserted {inserted} new movies")
+            if movie.id not in existing:
+                insert_movie(conn, movie)
+                store_vector(conn, movie.id, VECTOR_VERSION, build_full_vector(movie, embedding))
+                inserted += 1
+            elif movie.poster_url and not existing[movie.id]:
+                conn.execute(
+                    "UPDATE movies SET poster_url = ? WHERE id = ?",
+                    (movie.poster_url, movie.id),
+                )
+                poster_updated += 1
+        print(f"  Inserted {inserted} new movies, backfilled {poster_updated} poster URLs")
 
         # Watch events. Completion is total minutes over runtime, capped at 1, not per play:
         # PlayCount also counts partial restarts, which would make a full watch look unfinished.

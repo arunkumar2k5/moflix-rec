@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS movies (
     director TEXT NOT NULL,
     "cast" TEXT NOT NULL,
     overview TEXT NOT NULL DEFAULT '',
-    keywords TEXT NOT NULL DEFAULT '[]'
+    keywords TEXT NOT NULL DEFAULT '[]',
+    poster_url TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS movie_vectors (
     movie_id INTEGER PRIMARY KEY REFERENCES movies(id),
@@ -69,7 +70,14 @@ def connect(path: str | Path) -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA)
     _add_watch_signal_columns(conn)
+    _add_movie_columns(conn)
     return conn
+
+
+def _add_movie_columns(conn: sqlite3.Connection) -> None:
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(movies)")}
+    if "poster_url" not in existing:
+        conn.execute("ALTER TABLE movies ADD COLUMN poster_url TEXT NOT NULL DEFAULT ''")
 
 
 def _add_watch_signal_columns(conn: sqlite3.Connection) -> None:
@@ -82,8 +90,8 @@ def _add_watch_signal_columns(conn: sqlite3.Connection) -> None:
 def insert_movie(conn: sqlite3.Connection, movie: Movie) -> None:
     conn.execute(
         "INSERT INTO movies (id, title, year, genres, runtime, language, country,"
-        ' certification, rating, director, "cast", overview, keywords)'
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ' certification, rating, director, "cast", overview, keywords, poster_url)'
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             movie.id,
             movie.title,
@@ -98,6 +106,7 @@ def insert_movie(conn: sqlite3.Connection, movie: Movie) -> None:
             json.dumps(list(movie.cast)),
             movie.overview,
             json.dumps(list(movie.keywords)),
+            movie.poster_url,
         ),
     )
 
@@ -137,7 +146,7 @@ def decode_vector(blob: bytes) -> np.ndarray:
 def load_movies(conn: sqlite3.Connection) -> list[Movie]:
     cursor = conn.execute(
         "SELECT id, title, year, genres, runtime, language, country, certification, rating,"
-        ' director, "cast", overview, keywords FROM movies ORDER BY id'
+        ' director, "cast", overview, keywords, poster_url FROM movies ORDER BY id'
     )
     columns = [description[0] for description in cursor.description]
     movies = []
