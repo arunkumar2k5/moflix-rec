@@ -1,11 +1,13 @@
-"""Command line entry point: `python -m app.cli seed|recommend|sync`."""
+"""Command line entry point: `python -m app.cli seed|recommend|sync|add-user`."""
 
 import argparse
+import getpass
 import os
 import sys
 from pathlib import Path
 from typing import get_args
 
+from app.auth import Role, set_password
 from app.db import connect
 from app.recommend import DEFAULT_RANK_PARAMS, RankParams, RecommendError, Similarity, recommend
 from app.seed import SeedError, load_fixture, seed
@@ -55,12 +57,50 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         help="TMDB API key (defaults to TMDB_API_KEY env var)",
     )
+
+    user_cmd = commands.add_parser(
+        "add-user", help="create a login, or set a password and role for an existing user"
+    )
+    user_cmd.add_argument("--db", required=True)
+    user_cmd.add_argument("--user", required=True)
+    user_cmd.add_argument("--role", choices=get_args(Role), default="user")
     return parser
+
+
+def _read_password() -> str:
+    """Prompt twice on a terminal; otherwise read one line, so scripts can pipe it in.
+
+    Never taken as an argument, which would expose it in the process list and shell history.
+    """
+    if not sys.stdin.isatty():
+        return sys.stdin.readline().rstrip("\n")
+    password = getpass.getpass("Password: ")
+    if getpass.getpass("Repeat password: ") != password:
+        raise ValueError("passwords do not match")
+    return password
+
+
+def _add_user(db: str, user: str, role: Role) -> int:
+    try:
+        password = _read_password()
+    except ValueError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    if not password:
+        print("error: password must not be empty", file=sys.stderr)
+        return 1
+    conn = connect(db)
+    try:
+        created = set_password(conn, user, password, role)
+    finally:
+        conn.close()
+    print(f"{'created' if created else 'updated'} {role} {user!r}")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    if args.command == "recommend" and not Path(args.db).is_file():
+    if args.command in ("recommend", "add-user") and not Path(args.db).is_file():
         print(f"error: database not found: {args.db}", file=sys.stderr)
         return 1
     if args.command == "sync":
@@ -77,6 +117,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"error: {error}", file=sys.stderr)
             return 1
         return 0
+
+    if args.command == "add-user":
+        return _add_user(args.db, args.user, args.role)
 
     conn = connect(args.db)
     try:

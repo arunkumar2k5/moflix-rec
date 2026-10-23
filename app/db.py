@@ -1,12 +1,14 @@
-"""SQLite storage for users, movies, their vectors, watch history and taste vectors."""
+"""SQLite storage for users, their sessions, movies, vectors, watch history and taste vectors."""
 
 import json
 import sqlite3
 from datetime import datetime
 from pathlib import Path
+from typing import get_args
 
 import numpy as np
 
+from app.auth import Role
 from app.vectors import Movie
 
 SCHEMA = """
@@ -14,6 +16,17 @@ CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL UNIQUE
 );
+CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    expires_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS login_failures (
+    id INTEGER PRIMARY KEY,
+    username TEXT NOT NULL,
+    failed_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS login_failures_username ON login_failures(username, failed_at);
 CREATE TABLE IF NOT EXISTS movies (
     id INTEGER PRIMARY KEY,
     title TEXT NOT NULL,
@@ -61,30 +74,33 @@ WATCH_SIGNAL_COLUMNS = {
     "watched_at": "TEXT",
 }
 
+# Login credentials on users, added in place because synced and seeded users predate them.
+# A NULL password_hash means the account cannot log in until an admin runs `add-user`.
+USER_AUTH_COLUMNS = {
+    "password_hash": "TEXT",
+    "role": "TEXT NOT NULL DEFAULT 'user'"
+    f" CHECK (role IN ({', '.join(repr(role) for role in get_args(Role))}))",
+}
+
 # Vectors are stored as raw little-endian float64 bytes.
 VECTOR_DTYPE = np.dtype("<f8")
 
 
-def connect(path: str | Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(path)
+def connect(path: str | Path, check_same_thread: bool = True) -> sqlite3.Connection:
+    conn = sqlite3.connect(path, check_same_thread=check_same_thread)
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA)
-    _add_watch_signal_columns(conn)
-    _add_movie_columns(conn)
+    _add_missing_columns(conn, "users", USER_AUTH_COLUMNS)
+    _add_missing_columns(conn, "watch_events", WATCH_SIGNAL_COLUMNS)
+    _add_missing_columns(conn, "movies", {"poster_url": "TEXT NOT NULL DEFAULT ''"})
     return conn
 
 
-def _add_movie_columns(conn: sqlite3.Connection) -> None:
-    existing = {row[1] for row in conn.execute("PRAGMA table_info(movies)")}
-    if "poster_url" not in existing:
-        conn.execute("ALTER TABLE movies ADD COLUMN poster_url TEXT NOT NULL DEFAULT ''")
-
-
-def _add_watch_signal_columns(conn: sqlite3.Connection) -> None:
-    existing = {row[1] for row in conn.execute("PRAGMA table_info(watch_events)")}
-    for name, definition in WATCH_SIGNAL_COLUMNS.items():
+def _add_missing_columns(conn: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
+    existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    for name, definition in columns.items():
         if name not in existing:
-            conn.execute(f"ALTER TABLE watch_events ADD COLUMN {name} {definition}")
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
 
 
 def insert_movie(conn: sqlite3.Connection, movie: Movie) -> None:
