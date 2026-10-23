@@ -10,7 +10,7 @@
 
 The UI is a **TV zoom intro** (SVG room scene, couple on sofa, TV on the wall) that zooms
 into the TV screen to reveal the home page. The home page has:
-- A sticky header with logo, nav, and a "Who's watching?" user selector
+- A sticky header with logo, nav, and a login widget
 - Two personalised content rails (horizontal scroll-snap)
 - Placeholder "Movie night" and "Start a series" rows for later
 
@@ -19,28 +19,36 @@ plain HTML/CSS/JS.
 
 ---
 
-## Decision 1 — Authentication model: profile selector, not login form
+## Decision 1 — Authentication model: login form embedded in the TV screen
 
-**Decision:** No password-based login for v1. Users are selected by display name from a
-dropdown (Netflix-style). The choice is persisted in `localStorage`.
+**Decision:** Password-based login. The login form lives **inside the TV screen** on the
+landing page — top-right of the TV while the room intro plays.
 
-**Why:**
-- The wireframe shows a "Who's watching?" pill — a profile selector, not a login form
-- All users are known family/friends on a private home network
-- A password gate adds friction with zero security benefit on a LAN
-- This supersedes FR-1/FR-2 from the PRD for the web UI specifically
+**How it works:**
+- Username = exact DB username (e.g. "ak261", "Vimalnath")
+- All accounts start with the default password **`Test123`**
+- After first login the user can change their password (stored hashed in the DB)
+- Session via a secure HTTP-only cookie with expiry and logout
+- The home page only renders after a valid session exists
+- `GET /api/users` returns `[{ "id": "u1", "name": "Arun" }]` (names only, no hashes)
+  so the login form can populate a username dropdown
 
-**Impact on issue #5 (auth-sessions):**
-Issue #5 was written assuming password-based login with session cookies. The implementation
-must be revised:
-- No login page, no password field, no session cookie
-- `GET /api/users` returns the user list (id + name + optional avatar_url)
-- The frontend stores `moflix.user` in localStorage
-- Every API call passes `?user_id=<id>` or an `X-User-Id` header
-- Admin is still separate (handled outside the UI for now)
+**Login UI placement:**
+- The TV screen shows a compact login widget in the top-right corner while the intro plays
+- Username dropdown (populated from `/api/users`) + password field + Login button
+- On successful login the TV zooms into the home page as normal
+- On a returning valid session cookie the intro skips straight to the home page
 
-**Hard invariant still holds:** one user's data must never be readable by another.
-The backend validates `user_id` on every request and refuses cross-user access.
+**Password storage:**
+- `users` table gets a `password_hash TEXT` column (bcrypt)
+- Default hash for `Test123` written at sync time for any user with no password set yet
+- Endpoints:
+  - `POST /api/auth/login` — validates credentials, sets HTTP-only session cookie
+  - `POST /api/auth/logout` — clears session cookie
+  - `POST /api/auth/change-password` — validates current password, stores new bcrypt hash
+  - `GET /api/auth/me` — returns current user from session (used on page load to restore state)
+
+**Hard invariant:** session cookie validated on every request; cross-user access → 403.
 
 ---
 
@@ -48,12 +56,11 @@ The backend validates `user_id` on every request and refuses cross-user access.
 
 ### `GET /api/users`
 ```json
-[
-  { "id": "u1", "name": "Arun", "avatar_url": null }
-]
+[ { "id": "u1", "name": "Arun" } ]
 ```
-- `avatar_url` is optional; UI derives a colour-initial avatar from the name if missing
-- Dev fallback: `data/users.json` (same shape)
+- Names only — no password hashes ever leave the backend
+- Used to populate the login username dropdown
+- Dev fallback: `data/users.json`
 
 ### `GET /api/new-releases`
 ```json
@@ -61,14 +68,14 @@ The backend validates `user_id` on every request and refuses cross-user access.
   {
     "id": "m101", "title": "Example Title", "year": 2026, "type": "movie",
     "language": "Tamil", "runtime_min": 138, "genres": ["Drama"],
-    "poster_url": "https://.../poster.jpg", "overview": "...", "added_on": "2026-10-20"
+    "poster_url": "https://image.tmdb.org/t/p/w500/abc.jpg",
+    "overview": "...", "added_on": "2026-10-20"
   }
 ]
 ```
-- Content is **curated/provided** — not computed. Admin adds entries manually or via a
-  future Emby "recently added" sync.
+- Content is **curated** — admin adds entries; backend auto-fetches TMDB metadata by title
 - Dev fallback: `data/new_releases.json`
-- Empty list → section is hidden entirely
+- Empty list → section hidden entirely
 
 ### `GET /api/picks?user_id=<id>&limit=12`
 ```json
@@ -76,42 +83,38 @@ The backend validates `user_id` on every request and refuses cross-user access.
   {
     "id": "m42", "title": "Kara", "year": 2026, "type": "movie",
     "language": "Tamil", "runtime_min": 142, "genres": ["Action", "Thriller"],
-    "poster_url": "https://.../poster.jpg", "overview": "...",
-    "score": 0.87, "reason": "Matches your taste for Action, similar to Vada Chennai"
+    "poster_url": "https://image.tmdb.org/t/p/w500/xyz.jpg",
+    "overview": "...", "score": 0.87,
+    "reason": "Matches your taste for Action, similar to Vada Chennai"
   }
 ]
 ```
-- `score` is **0–1 cosine similarity** (not raw dot product). UI shows `round(score*100)%`.
-- `reason` is already generated by `app/recommend.py` — just needs to be wired to the endpoint
-- `poster_url` comes from TMDB (add to the movies table or fetch at serve time)
+- `score` is **cosine similarity in [0, 1]** — UI shows `round(score * 100)%`
+- `poster_url` now stored in movies table (721/736 backfilled from TMDB)
 - Dev fallback: `data/picks_<userId>.json`
+
+### `GET /api/auth/me`
+```json
+{ "id": "u1", "name": "Arun" }
+```
+Returns 401 if no valid session. Used on page load.
 
 ---
 
 ## Decision 3 — Score normalisation: cosine, not dot product
 
-**Decision:** The `/api/picks` endpoint uses cosine similarity (already supported via
-`--similarity cosine` in the CLI) and returns scores in [0, 1].
-
-**Why:** The UI shows `round(score * 100)` as a match percentage. Raw dot product scores
-(currently 3.x–5.x) would show nonsensical values like "319% match".
-
-`RankParams(similarity="cosine")` must be the default for the API endpoint.
+`RankParams(similarity="cosine")` must be the API default. Raw dot products (3–5 range)
+would show nonsensical match percentages.
 
 ---
 
 ## Decision 4 — Poster images
 
-**Decision:** Fetch poster URLs from TMDB at sync time and store in the `movies` table.
-The `emby_sync.py` already has the TMDB response — add `poster_path` extraction.
-
-TMDB poster base URL: `https://image.tmdb.org/t/p/w500{poster_path}`
-
-If `poster_url` is null or the image 404s, the UI shows a gradient placeholder
-(already handled in the card CSS).
-
-This is a small addition to `app/emby_sync.py` and `app/db.py` — add a `poster_url`
-column to the `movies` table.
+- `poster_url` stored in `movies` table as `https://image.tmdb.org/t/p/w500{poster_path}`
+- 721/736 movies backfilled as of 2026-10-22 (commit `ac3d489`)
+- Re-sync automatically backfills any movies with missing poster URLs
+- For new releases: admin POSTs a title → backend fetches TMDB → stores poster + metadata
+- Frontend CSS gradient placeholder shown if `poster_url` is null or image 404s
 
 ---
 
@@ -123,43 +126,39 @@ column to the `movies` table.
 | Portrait/tablet | aspect ratio < 1.6 | TV width = viewport width | Clip-expand ~500ms to full mobile layout |
 
 Portrait intro shows simplified content (logo + "Friday night, sorted." only).
-On portrait phones, the TV is cropped tighter (larger in opening shot).
+On portrait phones the TV is cropped tighter in the opening shot.
 
 ---
 
-## New endpoints needed (not in any current issue)
+## New endpoints summary
 
-| Endpoint | Who builds it | When |
+| Endpoint | Issue | Status |
 |---|---|---|
-| `GET /api/users` | Issue #5 (updated) | With auth |
-| `GET /api/picks?user_id=<id>` | Issue #7 | With recommendations API |
-| `GET /api/new-releases` | New small issue or manual | Before #12 |
-| `GET /api/health` | Issue #8 | With compose/health |
-
-`/api/new-releases` is the only one not covered by an existing issue. It can be a static
-JSON file served by the backend for now, with a simple admin endpoint to update it later.
+| `POST /api/auth/login` | #5 | PR #19 open |
+| `POST /api/auth/logout` | #5 | PR #19 open |
+| `POST /api/auth/change-password` | #5 | PR #19 open |
+| `GET /api/auth/me` | #5 | PR #19 open |
+| `GET /api/users` | #5 | PR #19 open |
+| `GET /api/picks` | #7 | Re-run after #5 merges |
+| `GET /api/health` | #8 | Re-run after #5+#6 merge |
+| `GET /api/new-releases` | Manual/small patch | Needed before #12 |
 
 ---
 
 ## What issue #12 (web-ui) will build
 
-Starting from `data/GUI/index.html` as the base:
-1. Replace placeholder `buildHome()` with real API calls
-2. Implement the user selector dropdown (desktop custom + mobile native `<select>`)
-3. Implement the two content rails with real data
-4. Mobile and portrait/landscape zoom improvements
-5. `localStorage` persistence, dev JSON fallbacks, error/retry states
-6. Reduced-motion support (already partially in the base file)
+Starting from `data/GUI/index.html`:
+1. Login widget in TV screen top-right (username dropdown + password + Login button)
+2. On valid session → TV zooms to home page
+3. Two content rails with real API data
+4. Password change modal after first login
+5. Mobile + portrait/landscape zoom modes
+6. Reduced-motion support, error/retry states, dev JSON fallbacks
 
-**Do not start #12 until:**
-- #5 (auth/users endpoint) is merged
-- #7 (recommendations endpoint) is merged
-- poster_url is added to the DB (small patch needed)
-- `/api/new-releases` stub exists
+**Do not start #12 until:** #5 and #7 are merged, poster_url is confirmed populated.
 
 ---
 
-## Files to add to .gitignore
+## Files to keep out of git
 
-`data/GUI/` contains wireframe source files — not committed (may contain
-design assets or personal preference data).
+`data/GUI/` — wireframe source files (gitignored).
