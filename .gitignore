@@ -11,4 +11,5 @@ node_modules/
 *.egg-info/
 .tmdb_cache.json
 data/emby/
+data/GUI/
 *.db
