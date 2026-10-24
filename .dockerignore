@@ -1,0 +1,11 @@
+.env
+*.db
+.git
+.venv
+venv
+data
+tests
+docs
+harness
+.factory
+__pycache__

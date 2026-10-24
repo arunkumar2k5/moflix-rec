@@ -1,0 +1,17 @@
+services:
+  app:
+    build: .
+    ports:
+      - "${MOFLIX_PORT:-8000}:8000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Keep the database on the named volume whatever MOFLIX_DB says in .env.
+      MOFLIX_DB: /data/moflix.db
+    volumes:
+      - moflix-data:/data
+    restart: unless-stopped
+
+volumes:
+  moflix-data:
