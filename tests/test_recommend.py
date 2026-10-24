@@ -21,8 +21,10 @@ from app.recommend import (
     RankParams,
     RecommendError,
     UserContext,
+    load_library,
     rank,
     recommend,
+    recommend_cold_start,
     watch_events,
 )
 from app.taste import WatchEvent, build_base_taste_vector
@@ -522,3 +524,64 @@ def test_watch_signal_columns_and_their_defaults_match_watch_event():
     conn.execute("INSERT INTO watch_events (user_id, movie_id) VALUES (?, 1)", (user_id,))
 
     assert watch_events(conn, user_id) == [WatchEvent(movie_id=1)]
+
+
+def _rated_library_db(movies: dict[int, tuple[float, np.ndarray]]):
+    conn = connect(":memory:")
+    for movie_id, (rating, vector) in movies.items():
+        movie = Movie(
+            movie_id, f"Movie {movie_id}", 2000, (), 100, "en", "US", "PG", rating, "", ()
+        )
+        insert_movie(conn, movie)
+        store_vector(conn, movie_id, VECTOR_VERSION, vector)
+    user_id = conn.execute("INSERT INTO users (name) VALUES ('dana')").lastrowid
+    return conn, user_id
+
+
+def _cold_start(conn, user_id, params, cold_start_min):
+    return recommend_cold_start(
+        conn,
+        user_id,
+        watch_events(conn, user_id),
+        load_library(conn),
+        params,
+        cold_start_min,
+        now=NOW,
+    )
+
+
+def test_cold_start_without_history_ranks_by_rating_then_id():
+    ratings = {1: 6.0, 2: 9.0, 3: 9.0, 4: 7.0}
+    conn, user_id = _rated_library_db({i: (r, _padded(1.0)) for i, r in ratings.items()})
+
+    results = _cold_start(conn, user_id, RankParams(top_n=3), cold_start_min=5)
+
+    assert [r.movie_id for r in results] == [2, 3, 4]
+    assert all(r.reason.startswith("Popular with high ratings") for r in results)
+    assert conn.execute("SELECT COUNT(*) FROM taste_vectors").fetchone() == (0,)
+
+
+@pytest.mark.parametrize(
+    ("cold_start_min", "expected"),
+    [(100, [3, 2]), (2, [2, 3])],  # taste weight 0.01: 0.792 vs 0.604; 0.5: 0.8 vs 0.4
+)
+def test_cold_start_blend_shifts_toward_taste_as_history_grows(cold_start_min, expected):
+    conn, user_id = _rated_library_db(
+        {1: (7.0, _padded(1.0, 0.0)), 2: (6.0, _padded(1.0, 0.0)), 3: (8.0, _padded(0.0, 1.0))}
+    )
+    _insert_events(conn, user_id, (1, 0))
+
+    results = _cold_start(conn, user_id, RankParams(top_n=2), cold_start_min)
+
+    assert [r.movie_id for r in results] == expected
+    reasons = {r.movie_id: r.reason for r in results}
+    assert reasons[3].startswith("Popular with high ratings")
+    assert reasons[2].startswith("Popular with high ratings") == (cold_start_min == 100)
+    assert _stored_taste(conn, "dana") is not None
+
+
+def test_cold_start_returns_nothing_when_every_movie_is_watched():
+    conn, user_id = _rated_library_db({1: (8.0, _padded(1.0))})
+    _insert_events(conn, user_id, (1, 0))
+
+    assert _cold_start(conn, user_id, RankParams(), cold_start_min=5) == []
