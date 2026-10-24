@@ -5,7 +5,7 @@ from app.llm import SYSTEM_PROMPT, IntentRequest, OpenRouterProvider, Pick, Turn
 
 
 def test_openrouter_sends_only_the_request_and_returns_the_reply_text():
-    provider = OpenRouterProvider("key", "some/model")
+    provider = OpenRouterProvider("key", "some/model", timeout_s=3.0)
     sent = {}
 
     def create(**kwargs):

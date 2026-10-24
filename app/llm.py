@@ -75,7 +75,7 @@ class LLMProvider(Protocol):
 
 
 class OpenRouterProvider:
-    def __init__(self, api_key: str, model: str = DEFAULT_MODEL, timeout_s: float = 3.0) -> None:
+    def __init__(self, api_key: str, model: str = DEFAULT_MODEL, *, timeout_s: float) -> None:
         from openai import OpenAI
 
         self.model = model
@@ -119,7 +119,9 @@ def provider_from_env(timeout_s: float) -> LLMProvider | None:
     api_key = os.environ.get("OPENROUTER_API_KEY", "")
     if not api_key:
         return None
-    return OpenRouterProvider(api_key, os.environ.get("OPENROUTER_MODEL", DEFAULT_MODEL), timeout_s)
+    return OpenRouterProvider(
+        api_key, os.environ.get("OPENROUTER_MODEL", DEFAULT_MODEL), timeout_s=timeout_s
+    )
 
 
 def monthly_cap_from_env() -> float:
