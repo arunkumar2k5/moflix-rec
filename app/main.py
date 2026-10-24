@@ -1,11 +1,13 @@
-"""Web service: `uvicorn app.main:app`. Reads the database path from MOFLIX_DB.
+"""Web service: `uvicorn app.main:app`. Reads the database path from MOFLIX_DB and the number of
+picks GET /recommendations returns from MOFLIX_TOP_N (default 3).
 
 There is deliberately no sign-up route; accounts come only from `python -m app.cli add-user`.
 """
 
 import os
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
 
@@ -25,7 +27,14 @@ from app.auth import (
     utc_now,
     verify_password,
 )
-from app.db import connect
+from app.db import connect, log_recommendations
+from app.recommend import (
+    LibraryCache,
+    NoWatchHistory,
+    RankParams,
+    RecommendError,
+    recommend_for_user,
+)
 
 SESSION_COOKIE = "session"
 
@@ -43,6 +52,22 @@ class LoggedIn(BaseModel):
 class UserInfo(BaseModel):
     id: int
     name: str
+
+
+class RecommendedMovie(BaseModel):
+    movie_id: int
+    title: str
+    year: int
+    genres: list[str]
+    runtime: int
+    poster_url: str
+    reason: str
+
+
+class Recommendations(BaseModel):
+    items: list[RecommendedMovie]
+    # True when the user has no watch history yet, so there is nothing to personalise from.
+    cold_start: bool
 
 
 class ChangePassword(BaseModel):
@@ -70,8 +95,23 @@ def current_user(conn: Db, token: SessionToken = None) -> User:
     return user
 
 
-def create_app(db_path: str | Path) -> FastAPI:
-    app = FastAPI(title="moflix-rec")
+def create_app(db_path: str | Path, top_n: int = 3) -> FastAPI:
+    rank_params = RankParams(top_n=top_n)
+    library_cache = LibraryCache()
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        # Loading a large library takes seconds; pay that at startup, not on a user's request.
+        conn = connect(db_path)
+        try:
+            library_cache.get(conn)
+        except RecommendError:
+            pass  # GET /recommendations reports it
+        finally:
+            conn.close()
+        yield
+
+    app = FastAPI(title="moflix-rec", lifespan=lifespan)
     app.state.db_path = db_path
 
     @app.post("/auth/login")
@@ -125,6 +165,33 @@ def create_app(db_path: str | Path) -> FastAPI:
             )
             conn.execute("DELETE FROM sessions WHERE user_id = ?", (user.id,))
 
+    @app.get("/recommendations")
+    def recommendations(conn: Db, user: Annotated[User, Depends(current_user)]) -> Recommendations:
+        try:
+            library = library_cache.get(conn)
+            picks = recommend_for_user(conn, user.id, library, rank_params)
+        except NoWatchHistory:
+            return Recommendations(items=[], cold_start=True)
+        except RecommendError as error:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(error)) from None
+        with conn:
+            log_recommendations(conn, user.id, [pick.movie_id for pick in picks], utc_now())
+        items = []
+        for pick in picks:
+            movie = library.by_id[pick.movie_id].movie
+            items.append(
+                RecommendedMovie(
+                    movie_id=movie.id,
+                    title=movie.title,
+                    year=movie.year,
+                    genres=list(movie.genres),
+                    runtime=movie.runtime,
+                    poster_url=movie.poster_url,
+                    reason=pick.reason,
+                )
+            )
+        return Recommendations(items=items, cold_start=False)
+
     @app.get("/api/users")
     def list_users(conn: Db) -> list[UserInfo]:
         rows = conn.execute("SELECT id, name FROM users ORDER BY name").fetchall()
@@ -133,4 +200,4 @@ def create_app(db_path: str | Path) -> FastAPI:
     return app
 
 
-app = create_app(os.environ.get("MOFLIX_DB", "moflix.db"))
+app = create_app(os.environ.get("MOFLIX_DB", "moflix.db"), int(os.environ.get("MOFLIX_TOP_N", "3")))

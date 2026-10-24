@@ -1,7 +1,8 @@
-"""SQLite storage for users, their sessions, movies, vectors, watch history and taste vectors."""
+"""SQLite storage for users, sessions, movies, vectors, watch history, taste vectors and picks."""
 
 import json
 import sqlite3
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import get_args
@@ -62,6 +63,13 @@ CREATE TABLE IF NOT EXISTS taste_vectors (
     computed_at TEXT NOT NULL,
     vector BLOB NOT NULL
 );
+CREATE TABLE IF NOT EXISTS recommendation_log (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    movie_id INTEGER NOT NULL REFERENCES movies(id),
+    shown_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS recommendation_log_user ON recommendation_log(user_id, shown_at);
 """
 
 # Taste signals on watch_events, added in place so databases created before them keep their
@@ -152,6 +160,15 @@ def store_taste_vector(
             computed_at.isoformat(),
             vector.astype(VECTOR_DTYPE).tobytes(),
         ),
+    )
+
+
+def log_recommendations(
+    conn: sqlite3.Connection, user_id: int, movie_ids: Sequence[int], shown_at: datetime
+) -> None:
+    conn.executemany(
+        "INSERT INTO recommendation_log (user_id, movie_id, shown_at) VALUES (?, ?, ?)",
+        [(user_id, movie_id, shown_at.isoformat()) for movie_id in movie_ids],
     )
 
 
