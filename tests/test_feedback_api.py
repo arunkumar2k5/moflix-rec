@@ -95,6 +95,20 @@ def test_watch_tonight_lists_the_latest_mark_first(db_path):
     assert listed == [second, first]
 
 
+def test_watch_tonight_with_stale_vectors_is_reported_as_unavailable(db_path):
+    client = logged_in(db_path, "alice")
+    _mark(client, _picks(client)[0], "watch_tonight")
+    conn = connect(db_path)
+    with conn:
+        conn.execute("UPDATE movie_vectors SET vector_version = vector_version - 1")
+    conn.close()
+
+    response = client.get("/feedback/watch-tonight")
+
+    assert response.status_code == 503
+    assert "rebuild" in response.json()["detail"]
+
+
 def test_the_latest_action_on_a_movie_wins(db_path):
     client = logged_in(db_path, "alice")
     movie_id = _picks(client)[0]

@@ -576,13 +576,6 @@ def test_feedback_alone_is_still_cold_start():
         recommend(conn, "dana", RankParams(top_n=3), now=NOW)
 
 
-def test_load_movies_can_load_only_some_ids():
-    conn, _ = _small_library_db()
-
-    assert [movie.id for movie in load_movies(conn, [4, 2])] == [2, 4]
-    assert load_movies(conn, []) == []
-
-
 def test_connect_adds_the_feedback_table_to_an_existing_database(tmp_path):
     path = tmp_path / "legacy.db"
     legacy = sqlite3.connect(path)

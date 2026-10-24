@@ -34,7 +34,6 @@ from app.db import (
     FeedbackAction,
     connect,
     current_feedback,
-    load_movies,
     log_recommendations,
     record_feedback,
 )
@@ -271,13 +270,16 @@ def create_app(db_path: str | Path, top_n: int = 3) -> FastAPI:
         conn: Db, user: Annotated[User, Depends(current_user)]
     ) -> list[FeedbackMovie]:
         """The user's Watch tonight movies, most recently marked first."""
-        ids = [
-            f.movie_id
-            for f in reversed(current_feedback(conn, user.id))
+        feedback = current_feedback(conn, user.id)
+        try:
+            library = library_cache.get(conn)
+        except RecommendError as error:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(error)) from None
+        return [
+            FeedbackMovie.of(library.by_id[f.movie_id].movie)
+            for f in reversed(feedback)
             if f.action == "watch_tonight"
         ]
-        movies = {movie.id: movie for movie in load_movies(conn, ids)}
-        return [FeedbackMovie.of(movies[movie_id]) for movie_id in ids]
 
     @app.get("/api/users")
     def list_users(conn: Db) -> list[UserInfo]:

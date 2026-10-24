@@ -3,7 +3,7 @@ and feedback on picks."""
 
 import json
 import sqlite3
-from collections.abc import Collection, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -226,13 +226,10 @@ def decode_vector(blob: bytes) -> np.ndarray:
     return np.frombuffer(blob, dtype=VECTOR_DTYPE)
 
 
-def load_movies(conn: sqlite3.Connection, ids: Collection[int] | None = None) -> list[Movie]:
-    """Every movie, or only those in `ids`, ordered by id."""
-    where = "" if ids is None else f" WHERE id IN ({', '.join('?' * len(ids))})"
+def load_movies(conn: sqlite3.Connection) -> list[Movie]:
     cursor = conn.execute(
         "SELECT id, title, year, genres, runtime, language, country, certification, rating,"
-        f' director, "cast", overview, keywords, poster_url FROM movies{where} ORDER BY id',
-        () if ids is None else tuple(ids),
+        ' director, "cast", overview, keywords, poster_url FROM movies ORDER BY id'
     )
     columns = [description[0] for description in cursor.description]
     movies = []
