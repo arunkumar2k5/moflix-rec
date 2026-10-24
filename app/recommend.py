@@ -7,6 +7,7 @@ import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from threading import Lock
 from typing import Literal, get_args
 
 import numpy as np
@@ -19,6 +20,10 @@ Similarity = Literal["dot", "cosine"]
 
 
 class RecommendError(Exception):
+    pass
+
+
+class NoWatchHistory(RecommendError):
     pass
 
 
@@ -43,6 +48,30 @@ class UserContext:
     excluded_ids: frozenset[int]  # every movie the user has an event for, liked or not
     liked: tuple[Candidate, ...]  # only this user's positively weighted movies, named in reasons
     passed: tuple[Candidate, ...] = ()  # this user's other movies, named only as passed on
+
+
+@dataclass(frozen=True, eq=False)
+class Library:
+    """Candidate movies with their vectors stacked once, so ranking copies no vectors."""
+
+    candidates: tuple[Candidate, ...]
+    by_id: dict[int, Candidate]
+    ids: np.ndarray
+    matrix: np.ndarray  # one row per candidate, in `candidates` order
+    unit: np.ndarray  # `matrix` rows scaled to unit length
+
+    @classmethod
+    def of(cls, candidates: Sequence[Candidate]) -> "Library":
+        matrix = np.stack([c.vector for c in candidates]) if candidates else np.empty((0, 0))
+        # Point each candidate at its row so the library holds one copy of every vector.
+        rows = tuple(Candidate(c.movie, row) for c, row in zip(candidates, matrix, strict=True))
+        return cls(
+            candidates=rows,
+            by_id={c.movie.id: c for c in rows},
+            ids=np.array([c.movie.id for c in rows], dtype=np.int64),
+            matrix=matrix,
+            unit=_unit_rows(matrix),
+        )
 
 
 @dataclass(frozen=True)
@@ -82,7 +111,7 @@ NO_CONSTRAINTS = Constraints()
 
 def rank(
     user_ctx: UserContext,
-    candidates: Sequence[Candidate],
+    library: Library,
     constraints: Constraints,
     params: RankParams,
 ) -> list[Recommendation]:
@@ -90,25 +119,22 @@ def rank(
 
     Picked greedily by MMR; equal objectives go to the higher score, then the lower movie id.
     """
-    eligible = [
-        candidate
-        for candidate in candidates
-        if candidate.movie.id not in user_ctx.excluded_ids and _passes(candidate.movie, constraints)
-    ]
-    if not eligible:
+    eligible = ~np.isin(library.ids, list(user_ctx.excluded_ids))
+    if constraints != NO_CONSTRAINTS:
+        eligible &= [_passes(c.movie, constraints) for c in library.candidates]
+    rows = np.flatnonzero(eligible)
+    if not len(rows):
         return []
-    ids = np.array([candidate.movie.id for candidate in eligible])
-    matrix = np.stack([candidate.vector for candidate in eligible])
-    scores = _scores(user_ctx.taste, matrix, params.similarity)
-    order = np.lexsort((ids, -scores))
-    picks = order[_mmr(scores[order], matrix[order], params.mmr_lambda, params.top_n)]
+    scores = _scores(user_ctx.taste, library, params.similarity)
+    order = rows[np.lexsort((library.ids[rows], -scores[rows]))]
+    picks = order[_mmr(scores[order], library.unit, order, params.mmr_lambda, params.top_n)]
     return [
         Recommendation(
-            movie_id=eligible[i].movie.id,
-            title=eligible[i].movie.title,
-            year=eligible[i].movie.year,
+            movie_id=library.candidates[i].movie.id,
+            title=library.candidates[i].movie.title,
+            year=library.candidates[i].movie.year,
             score=float(scores[i]),
-            reason=_reason(eligible[i], user_ctx),
+            reason=_reason(library.candidates[i], user_ctx),
         )
         for i in picks
     ]
@@ -140,21 +166,24 @@ def _unit_rows(matrix: np.ndarray) -> np.ndarray:
     return np.divide(matrix, norms, out=np.zeros_like(matrix, dtype=float), where=norms > 0)
 
 
-def _scores(taste: np.ndarray, matrix: np.ndarray, similarity: Similarity) -> np.ndarray:
+def _scores(taste: np.ndarray, library: Library, similarity: Similarity) -> np.ndarray:
     if similarity == "cosine":
-        return _unit_rows(matrix) @ _unit_rows(taste)
-    return matrix @ taste
+        return library.unit @ _unit_rows(taste)
+    return library.matrix @ taste
 
 
-def _mmr(scores: np.ndarray, matrix: np.ndarray, lam: float, top_n: int) -> list[int]:
+def _mmr(
+    scores: np.ndarray, unit: np.ndarray, rows: np.ndarray, lam: float, top_n: int
+) -> list[int]:
     """Greedy MMR picks as indices into `scores`, which must be sorted best first.
+
+    `rows` maps each score to its row of `unit`, the unit-length candidate vectors.
 
     Relevance is min-max scaled to [0, 1] so lambda trades it against item-item cosine on the
     same scale whatever the similarity. Redundancy is always cosine: it is about direction.
     """
     spread = scores.max() - scores.min()
     relevance = (scores - scores.min()) / spread if spread > 0 else np.ones_like(scores)
-    unit = _unit_rows(matrix)
     redundancy = np.zeros_like(scores)
     available = np.ones(len(scores), dtype=bool)
     picks: list[int] = []
@@ -163,7 +192,7 @@ def _mmr(scores: np.ndarray, matrix: np.ndarray, lam: float, top_n: int) -> list
         pick = int(np.argmax(objective))
         picks.append(pick)
         available[pick] = False
-        redundancy = np.maximum(redundancy, unit @ unit[pick])
+        redundancy = np.maximum(redundancy, (unit @ unit[rows[pick]])[rows])
     return picks
 
 
@@ -215,7 +244,7 @@ def _user_id(conn: sqlite3.Connection, user_name: str) -> int:
     return row[0]
 
 
-def _watch_events(conn: sqlite3.Connection, user_id: int) -> list[WatchEvent]:
+def watch_events(conn: sqlite3.Connection, user_id: int) -> list[WatchEvent]:
     rows = conn.execute(
         "SELECT movie_id, completion, play_count, favourite, not_interested, watched_at"
         " FROM watch_events WHERE user_id = ? ORDER BY movie_id, id",
@@ -234,7 +263,7 @@ def _watch_events(conn: sqlite3.Connection, user_id: int) -> list[WatchEvent]:
     ]
 
 
-def _load_vectors(conn: sqlite3.Connection) -> tuple[np.ndarray, np.ndarray]:
+def load_library(conn: sqlite3.Connection) -> Library:
     rows = conn.execute(
         "SELECT movie_id, vector_version, dimension, vector FROM movie_vectors ORDER BY movie_id"
     ).fetchall()
@@ -243,9 +272,69 @@ def _load_vectors(conn: sqlite3.Connection) -> tuple[np.ndarray, np.ndarray]:
         raise RecommendError(
             f"{stale} movie vectors are not version {VECTOR_VERSION}; rebuild them first"
         )
-    ids = np.array([row[0] for row in rows], dtype=np.int64)
-    matrix = np.array([decode_vector(row[3]) for row in rows]).reshape(len(rows), FULL_DIMENSION)
-    return ids, matrix
+    movies = {movie.id: movie for movie in load_movies(conn)}
+    return Library.of([Candidate(movies[row[0]], decode_vector(row[3])) for row in rows])
+
+
+def _library_fingerprint(conn: sqlite3.Connection) -> tuple:
+    return conn.execute(
+        "SELECT COUNT(*), MAX(movie_id), TOTAL(vector_version) FROM movie_vectors"
+    ).fetchone()
+
+
+class LibraryCache:
+    """Keeps the library in memory, reloading it when movie vectors are added or rebuilt.
+
+    A sync in another process only ever inserts movies with their vectors, and a version bump
+    rewrites every vector, so the fingerprint catches both. In-place metadata edits that leave
+    the vectors alone (such as a poster backfill) show up only after a restart.
+    """
+
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._fingerprint: tuple | None = None
+        self._library: Library | None = None
+
+    def get(self, conn: sqlite3.Connection) -> Library:
+        fingerprint = _library_fingerprint(conn)
+        with self._lock:
+            if self._library is None or fingerprint != self._fingerprint:
+                self._library = load_library(conn)
+                self._fingerprint = fingerprint
+            return self._library
+
+
+def recommend_for_user(
+    conn: sqlite3.Connection,
+    user_id: int,
+    events: Sequence[WatchEvent],
+    library: Library,
+    params: RankParams = DEFAULT_RANK_PARAMS,
+    constraints: Constraints = NO_CONSTRAINTS,
+    now: datetime | None = None,
+) -> list[Recommendation]:
+    """Rank the user's unseen movies, recording the taste vector built at `now`.
+
+    Read `events` before taking `library`: a sync commits a movie's vector together with any
+    event for it, so only that order guarantees every watched movie is in the library.
+    """
+    now = now or datetime.now(timezone.utc)
+    if not events:
+        raise NoWatchHistory("no watch history to build a taste vector from")
+    candidates = library.by_id
+    watched_vectors = {e.movie_id: candidates[e.movie_id].vector for e in events}
+    taste = build_base_taste_vector(events, watched_vectors, now)
+    with conn:
+        store_taste_vector(conn, user_id, VECTOR_VERSION, taste, now)
+    liked_ids = {e.movie_id for e in events if event_weight(e, now, DEFAULT_PARAMS) > 0}
+    excluded_ids = frozenset(event.movie_id for event in events)
+    user_ctx = UserContext(
+        taste=taste,
+        excluded_ids=excluded_ids,
+        liked=tuple(candidates[movie_id] for movie_id in sorted(liked_ids)),
+        passed=tuple(candidates[movie_id] for movie_id in sorted(excluded_ids - liked_ids)),
+    )
+    return rank(user_ctx, library, constraints, params)
 
 
 def recommend(
@@ -255,25 +344,12 @@ def recommend(
     constraints: Constraints = NO_CONSTRAINTS,
     now: datetime | None = None,
 ) -> list[Recommendation]:
-    """Rank the user's unseen movies, recording the taste vector built at `now`."""
-    now = now or datetime.now(timezone.utc)
+    """`recommend_for_user` by name, loading the library from scratch."""
     user_id = _user_id(conn, user_name)
-    events = _watch_events(conn, user_id)
-    if not events:
-        raise RecommendError(f"user {user_name} has no watch history to build a taste vector from")
-    ids, matrix = _load_vectors(conn)
-    vectors = dict(zip(ids.tolist(), matrix, strict=True))
-    taste = build_base_taste_vector(events, vectors, now)
-    with conn:
-        store_taste_vector(conn, user_id, VECTOR_VERSION, taste, now)
-    movies = {movie.id: movie for movie in load_movies(conn)}
-    candidates = {movie_id: Candidate(movies[movie_id], v) for movie_id, v in vectors.items()}
-    liked_ids = {e.movie_id for e in events if event_weight(e, now, DEFAULT_PARAMS) > 0}
-    excluded_ids = frozenset(event.movie_id for event in events)
-    user_ctx = UserContext(
-        taste=taste,
-        excluded_ids=excluded_ids,
-        liked=tuple(candidates[movie_id] for movie_id in sorted(liked_ids)),
-        passed=tuple(candidates[movie_id] for movie_id in sorted(excluded_ids - liked_ids)),
-    )
-    return rank(user_ctx, list(candidates.values()), constraints, params)
+    events = watch_events(conn, user_id)
+    try:
+        return recommend_for_user(
+            conn, user_id, events, load_library(conn), params, constraints, now
+        )
+    except NoWatchHistory as error:
+        raise NoWatchHistory(f"user {user_name} has {error}") from None

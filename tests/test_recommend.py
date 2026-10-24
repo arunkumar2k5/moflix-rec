@@ -17,12 +17,13 @@ from app.db import (
 from app.recommend import (
     Candidate,
     Constraints,
+    Library,
     RankParams,
     RecommendError,
     UserContext,
-    _watch_events,
     rank,
     recommend,
+    watch_events,
 )
 from app.taste import WatchEvent, build_base_taste_vector
 from app.vectors import FULL_DIMENSION, GENRES, LAYOUT, VECTOR_VERSION, Movie
@@ -96,6 +97,10 @@ def _candidate(movie_id: int, vector, title: str = "", **metadata) -> Candidate:
     return Candidate(movie, np.asarray(vector, dtype=float))
 
 
+def _rank(user_ctx, candidates, constraints, params):
+    return rank(user_ctx, Library.of(candidates), constraints, params)
+
+
 def _context(taste, excluded=(), liked=(), passed=()) -> UserContext:
     return UserContext(
         np.asarray(taste, dtype=float), frozenset(excluded), tuple(liked), tuple(passed)
@@ -112,7 +117,7 @@ def test_rank_scores_are_dot_products_in_descending_order():
         _candidate(30, [2.0, 0.5, 0.0, 0.25]),  # 1.0 + 0.5 + 0.5 = 2.0
     ]
 
-    ranked = rank(_context([0.5, 1.0, 0.0, 2.0]), candidates, Constraints(), RELEVANCE_ONLY)
+    ranked = _rank(_context([0.5, 1.0, 0.0, 2.0]), candidates, Constraints(), RELEVANCE_ONLY)
 
     assert [r.movie_id for r in ranked] == [20, 30, 10]
     np.testing.assert_allclose([r.score for r in ranked], [3.0, 2.0, 0.5], atol=1e-6)
@@ -121,7 +126,7 @@ def test_rank_scores_are_dot_products_in_descending_order():
 def test_rank_breaks_ties_by_ascending_movie_id():
     candidates = [_candidate(7, [1.0, 0.0]), _candidate(3, [0.0, 1.0]), _candidate(5, [0.5, 0.5])]
 
-    ranked = rank(_context([1.0, 1.0]), candidates, Constraints(), RELEVANCE_ONLY)
+    ranked = _rank(_context([1.0, 1.0]), candidates, Constraints(), RELEVANCE_ONLY)
 
     assert [r.movie_id for r in ranked] == [3, 5, 7]
 
@@ -131,7 +136,7 @@ def test_cosine_ignores_magnitude_while_dot_scales_with_it():
 
     def scores(similarity):
         params = RankParams(similarity=similarity, mmr_lambda=1.0)
-        ranked = rank(_context([1.0, 1.0]), candidates, Constraints(), params)
+        ranked = _rank(_context([1.0, 1.0]), candidates, Constraints(), params)
         return {r.movie_id: r.score for r in ranked}
 
     cosine = scores("cosine")
@@ -141,7 +146,7 @@ def test_cosine_ignores_magnitude_while_dot_scales_with_it():
 
 
 def test_cosine_scores_a_zero_vector_zero():
-    ranked = rank(
+    ranked = _rank(
         _context([1.0, 1.0]),
         [_candidate(1, [0.0, 0.0])],
         Constraints(),
@@ -154,13 +159,13 @@ def test_cosine_scores_a_zero_vector_zero():
 def test_rank_never_returns_an_excluded_movie_even_when_it_scores_highest():
     candidates = [_candidate(1, [1.0, 0.0]), _candidate(2, [5.0, 0.0])]
 
-    ranked = rank(_context([1.0, 0.0], excluded={2}), candidates, Constraints(), RankParams())
+    ranked = _rank(_context([1.0, 0.0], excluded={2}), candidates, Constraints(), RankParams())
 
     assert [r.movie_id for r in ranked] == [1]
 
 
 def test_rank_returns_nothing_when_constraints_exclude_every_movie():
-    ranked = rank(
+    ranked = _rank(
         _context([1.0]),
         [_candidate(1, [1.0], runtime=150)],
         Constraints(max_runtime=120),
@@ -183,7 +188,7 @@ MMR_CANDIDATES = [
 def test_mmr_keeps_only_one_of_two_identical_top_movies_unless_lambda_is_one(mmr_lambda, expected):
     params = RankParams(mmr_lambda=mmr_lambda, top_n=3)
 
-    ranked = rank(_context([1.2, 1.0, 1.0]), MMR_CANDIDATES, Constraints(), params)
+    ranked = _rank(_context([1.2, 1.0, 1.0]), MMR_CANDIDATES, Constraints(), params)
 
     assert [r.movie_id for r in ranked] == expected
 
@@ -208,7 +213,7 @@ def test_reason_names_the_top_contributing_genre_and_closest_liked_title():
     candidate = _candidate(1, _genre_vector("Drama", "Thriller"), genres=("Drama", "Thriller"))
     taste = _genre_vector("Thriller") * 2 + _genre_vector("Drama")
 
-    [result] = rank(_context(taste, liked=[liked]), [candidate], Constraints(), RankParams())
+    [result] = _rank(_context(taste, liked=[liked]), [candidate], Constraints(), RankParams())
 
     assert result.reason == "Matches your taste for Thriller, similar to Heat"
 
@@ -217,7 +222,7 @@ def test_reason_falls_back_to_the_movies_genre_without_taste_or_liked_signal():
     candidate = _candidate(1, _genre_vector("Thriller"), genres=("Thriller",))
     taste = np.zeros(LAYOUT["genres"].stop)
 
-    [result] = rank(_context(taste), [candidate], Constraints(), RankParams())
+    [result] = _rank(_context(taste), [candidate], Constraints(), RankParams())
 
     assert result.reason == "A Thriller pick close to your overall taste"
 
@@ -226,7 +231,9 @@ def test_reason_for_a_genreless_movie_names_a_liked_title_even_when_it_is_not_si
     liked = _candidate(9, _padded(0.0, 1.0), title="Heat")
     candidate = _candidate(1, _padded(1.0))
 
-    [result] = rank(_context(_padded(1.0), liked=[liked]), [candidate], Constraints(), RankParams())
+    [result] = _rank(
+        _context(_padded(1.0), liked=[liked]), [candidate], Constraints(), RankParams()
+    )
 
     assert result.reason == "Picked for someone who enjoyed Heat"
 
@@ -235,7 +242,7 @@ def test_reason_for_a_genreless_movie_names_a_passed_title_without_liked_ones():
     passed = _candidate(9, _padded(0.0, 1.0), title="Heat")
     candidate = _candidate(1, _padded(1.0))
 
-    [result] = rank(
+    [result] = _rank(
         _context(_padded(1.0), passed=[passed]), [candidate], Constraints(), RankParams()
     )
 
@@ -295,7 +302,7 @@ def test_year_range_constraint_keeps_only_movies_inside_it(seeded_db):
 def test_an_empty_language_set_leaves_languages_unconstrained():
     candidates = [_candidate(1, [1.0], language="en"), _candidate(2, [2.0], language="fr")]
 
-    results = rank(_context([1.0]), candidates, Constraints(languages=frozenset()), RankParams())
+    results = _rank(_context([1.0]), candidates, Constraints(languages=frozenset()), RankParams())
 
     assert {r.movie_id for r in results} == {1, 2}
 
@@ -309,7 +316,7 @@ def test_terms_match_titles_and_keywords_case_insensitively():
     ]
 
     def picked(constraints: Constraints) -> set[int]:
-        return {r.movie_id for r in rank(_context([1.0]), candidates, constraints, RankParams())}
+        return {r.movie_id for r in _rank(_context([1.0]), candidates, constraints, RankParams())}
 
     assert picked(Constraints(excluded_terms=frozenset({"marvel"}))) == {3, 4}
     assert picked(Constraints(required_terms=frozenset({"SUPERHERO", "marvel"}))) == {1}
@@ -514,4 +521,4 @@ def test_watch_signal_columns_and_their_defaults_match_watch_event():
     conn, user_id = _small_library_db()
     conn.execute("INSERT INTO watch_events (user_id, movie_id) VALUES (?, 1)", (user_id,))
 
-    assert _watch_events(conn, user_id) == [WatchEvent(movie_id=1)]
+    assert watch_events(conn, user_id) == [WatchEvent(movie_id=1)]
