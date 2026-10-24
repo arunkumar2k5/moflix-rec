@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "disable_existing_loggers": false,
+  "formatters": {
+    "json": {"()": "app.logs.JsonFormatter"}
+  },
+  "handlers": {
+    "stderr": {"class": "logging.StreamHandler", "formatter": "json", "stream": "ext://sys.stderr"}
+  },
+  "loggers": {
+    "moflix": {"level": "INFO"},
+    "uvicorn": {"level": "INFO"},
+    "uvicorn.error": {"level": "INFO"}
+  },
+  "root": {"level": "WARNING", "handlers": ["stderr"]}
+}

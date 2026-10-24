@@ -1,0 +1,26 @@
+services:
+  app:
+    build: .
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # The database lives on the named volume whatever MOFLIX_DB says in .env.
+      MOFLIX_DB: /data/moflix.db
+    ports:
+      - "8000:8000"
+    volumes:
+      - moflix-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  moflix-data:
