@@ -31,7 +31,7 @@ from app.auth import (
     verify_password,
 )
 from app.db import connect, log_recommendations
-from app.logs import logger
+from app.logs import RequestContext, logger
 from app.recommend import (
     LibraryCache,
     NoWatchHistory,
@@ -134,13 +134,13 @@ def create_app(db_path: str | Path, top_n: int = 3) -> FastAPI:
         response = await call_next(request)
         logger.info(
             "request",
-            extra={
-                "method": request.method,
-                "path": request.url.path,
-                "status": response.status_code,
-                "duration_ms": round((time.perf_counter() - started) * 1000, 1),
-                "user_id": getattr(request.state, "user_id", None),
-            },
+            extra=RequestContext(
+                method=request.method,
+                path=request.url.path,
+                status=response.status_code,
+                duration_ms=round((time.perf_counter() - started) * 1000, 1),
+                user_id=getattr(request.state, "user_id", None),
+            ),
         )
         return response
 
