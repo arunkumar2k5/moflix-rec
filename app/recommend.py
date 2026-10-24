@@ -106,6 +106,7 @@ class RankParams:
 
 
 DEFAULT_RANK_PARAMS = RankParams()
+DEFAULT_COLD_START_MIN = 5
 NO_CONSTRAINTS = Constraints()
 
 
@@ -321,6 +322,71 @@ def recommend_for_user(
     now = now or datetime.now(timezone.utc)
     if not events:
         raise NoWatchHistory("no watch history to build a taste vector from")
+    return rank(_user_context(conn, user_id, events, library, now), library, constraints, params)
+
+
+def recommend_cold_start(
+    conn: sqlite3.Connection,
+    user_id: int,
+    events: Sequence[WatchEvent],
+    library: Library,
+    params: RankParams = DEFAULT_RANK_PARAMS,
+    cold_start_min: int = DEFAULT_COLD_START_MIN,
+    now: datetime | None = None,
+) -> list[Recommendation]:
+    """Popular unseen movies blended with whatever taste signal exists (FR-16).
+
+    For users with fewer than `cold_start_min` watched movies: the taste weight grows linearly
+    with the number watched, from pure popularity at none. Popularity is the movie's own 0-10
+    community rating and nothing else; the library has no vote count, and play counts are other
+    users' histories. Picks keep popularity order, so there is no MMR here.
+
+    Read `events` before taking `library`, as for `recommend_for_user`.
+    """
+    now = now or datetime.now(timezone.utc)
+    excluded = {e.movie_id for e in events}
+    rows = np.flatnonzero(~np.isin(library.ids, list(excluded)))
+    if not len(rows):
+        return []
+    popularity = np.clip([c.movie.rating for c in library.candidates], 0.0, 10.0)[rows] / 10
+    user_ctx = _user_context(conn, user_id, events, library, now) if events else None
+    relevance = np.zeros(len(rows))
+    if user_ctx is not None:
+        scores = _scores(user_ctx.taste, library, params.similarity)[rows]
+        spread = scores.max() - scores.min()
+        if spread > 0:
+            relevance = (scores - scores.min()) / spread
+    taste_weight = len(excluded) / cold_start_min
+    popular_term = (1 - taste_weight) * popularity
+    taste_term = taste_weight * relevance
+    blended = popular_term + taste_term
+    picks = []
+    for k in np.lexsort((library.ids[rows], -blended))[: params.top_n]:
+        candidate = library.candidates[rows[k]]
+        if user_ctx is not None and taste_term[k] > popular_term[k]:
+            reason = _reason(candidate, user_ctx)
+        else:
+            reason = f"Popular with high ratings ({candidate.movie.rating:.1f}/10)"
+        picks.append(
+            Recommendation(
+                movie_id=candidate.movie.id,
+                title=candidate.movie.title,
+                year=candidate.movie.year,
+                score=float(blended[k]),
+                reason=reason,
+            )
+        )
+    return picks
+
+
+def _user_context(
+    conn: sqlite3.Connection,
+    user_id: int,
+    events: Sequence[WatchEvent],
+    library: Library,
+    now: datetime,
+) -> UserContext:
+    """The user's taste built at `now` from their events, recording it as a side effect."""
     candidates = library.by_id
     watched_vectors = {e.movie_id: candidates[e.movie_id].vector for e in events}
     taste = build_base_taste_vector(events, watched_vectors, now)
@@ -328,13 +394,12 @@ def recommend_for_user(
         store_taste_vector(conn, user_id, VECTOR_VERSION, taste, now)
     liked_ids = {e.movie_id for e in events if event_weight(e, now, DEFAULT_PARAMS) > 0}
     excluded_ids = frozenset(event.movie_id for event in events)
-    user_ctx = UserContext(
+    return UserContext(
         taste=taste,
         excluded_ids=excluded_ids,
         liked=tuple(candidates[movie_id] for movie_id in sorted(liked_ids)),
         passed=tuple(candidates[movie_id] for movie_id in sorted(excluded_ids - liked_ids)),
     )
-    return rank(user_ctx, library, constraints, params)
 
 
 def recommend(

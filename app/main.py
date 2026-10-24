@@ -1,7 +1,8 @@
 """Web service: `uvicorn app.main:app --log-config app/log_config.json`.
 
-Reads the database path from MOLLIB_DB and the number of picks GET /recommendations
-returns from MOFLIX_TOP_N (default 3).
+Reads the database path from MOFLIX_DB, the number of picks GET /recommendations
+returns from MOFLIX_TOP_N (default 3), and from MOFLIX_COLD_START_MIN (default 5) how many
+watched movies a user needs before picks stop leaning on popularity.
 
 There is deliberately no sign-up route; accounts come only from `python -m app.cli add-user`.
 """
@@ -33,15 +34,20 @@ from app.auth import (
 from app.db import connect, log_recommendations
 from app.logs import RequestContext, logger
 from app.recommend import (
+    DEFAULT_COLD_START_MIN,
     LibraryCache,
-    NoWatchHistory,
     RankParams,
     RecommendError,
+    recommend_cold_start,
     recommend_for_user,
     watch_events,
 )
 
 SESSION_COOKIE = "session"
+ONBOARDING_PROMPT = (
+    "New here? Tell us a few genres you like, such as Comedy, Science Fiction or Thriller,"
+    " and we'll tailor these picks to you."
+)
 
 
 class Credentials(BaseModel):
@@ -71,8 +77,10 @@ class RecommendedMovie(BaseModel):
 
 class Recommendations(BaseModel):
     items: list[RecommendedMovie]
-    # True when the user has no watch history yet, so there is nothing to personalise from.
+    # True when the user has watched fewer than `cold_start_min` movies, so picks lean on
+    # popularity and `onboarding_prompt` invites them to name genres.
     cold_start: bool
+    onboarding_prompt: str | None = None
 
 
 class ChangePassword(BaseModel):
@@ -106,7 +114,11 @@ def current_user(request: Request, conn: Db, token: SessionToken = None) -> User
     return user
 
 
-def create_app(db_path: str | Path, top_n: int = 3) -> FastAPI:
+def create_app(
+    db_path: str | Path, top_n: int = 3, cold_start_min: int = DEFAULT_COLD_START_MIN
+) -> FastAPI:
+    if cold_start_min < 1:
+        raise ValueError(f"cold_start_min must be at least 1, got {cold_start_min}")
     rank_params = RankParams(top_n=top_n)
     library_cache = LibraryCache()
 
@@ -209,11 +221,15 @@ def create_app(db_path: str | Path, top_n: int = 3) -> FastAPI:
     @app.get("/recommendations")
     def recommendations(conn: Db, user: Annotated[User, Depends(current_user)]) -> Recommendations:
         events = watch_events(conn, user.id)
+        cold_start = len({e.movie_id for e in events}) < cold_start_min
         try:
             library = library_cache.get(conn)
-            picks = recommend_for_user(conn, user.id, events, library, rank_params)
-        except NoWatchHistory:
-            return Recommendations(items=[], cold_start=True)
+            if cold_start:
+                picks = recommend_cold_start(
+                    conn, user.id, events, library, rank_params, cold_start_min
+                )
+            else:
+                picks = recommend_for_user(conn, user.id, events, library, rank_params)
         except RecommendError as error:
             raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(error)) from None
         with conn:
@@ -232,7 +248,11 @@ def create_app(db_path: str | Path, top_n: int = 3) -> FastAPI:
                     reason=pick.reason,
                 )
             )
-        return Recommendations(items=items, cold_start=False)
+        return Recommendations(
+            items=items,
+            cold_start=cold_start,
+            onboarding_prompt=ONBOARDING_PROMPT if cold_start else None,
+        )
 
     @app.get("/api/users")
     def list_users(conn: Db) -> list[UserInfo]:
@@ -242,4 +262,8 @@ def create_app(db_path: str | Path, top_n: int = 3) -> FastAPI:
     return app
 
 
-app = create_app(os.environ.get("MOFLIX_DB", "moflix.db"), int(os.environ.get("MOFLIX_TOP_N", "3")))
+app = create_app(
+    os.environ.get("MOFLIX_DB", "moflix.db"),
+    int(os.environ.get("MOFLIX_TOP_N", "3")),
+    int(os.environ.get("MOFLIX_COLD_START_MIN", DEFAULT_COLD_START_MIN)),
+)
