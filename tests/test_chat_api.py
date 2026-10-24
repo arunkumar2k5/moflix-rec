@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from app.auth import set_password
 from app.chat import SIMPLE_MODE_NOTICE, ChatConfig, active_session, merge
 from app.db import connect, decode_vector, insert_movie, store_vector
-from app.llm import COST_PER_INPUT_TOKEN, COST_PER_OUTPUT_TOKEN, Completion, IntentRequest
+from app.llm import Completion, IntentRequest
 from app.main import create_app
 from app.recommend import DEFAULT_COLD_START_MIN, Constraints
 from app.vectors import FULL_DIMENSION, GENRES, VECTOR_VERSION, Movie
@@ -18,6 +18,7 @@ from app.vectors import FULL_DIMENSION, GENRES, VECTOR_VERSION, Movie
 PASSWORD = "correct horse battery staple"
 NINETIES = '{"era": {"from": 1990, "to": 1999}}'
 ONLY_HORROR = '{"hard_filters": {"require": {"genres": ["Horror"]}}}'
+COST_PER_CALL_USD = 0.001
 
 
 class FakeProvider:
@@ -32,7 +33,13 @@ class FakeProvider:
         self.requests.append(request)
         time.sleep(self.delay_s)
         text = self.replies.pop(0) if len(self.replies) > 1 else self.replies[0]
-        return Completion(text=text, model="fake", input_tokens=100, output_tokens=20)
+        return Completion(
+            text=text,
+            model="fake",
+            input_tokens=100,
+            output_tokens=20,
+            cost_usd=COST_PER_CALL_USD,
+        )
 
 
 class FailingProvider:
@@ -149,6 +156,24 @@ def test_the_provider_sees_only_the_message_own_turns_and_shown_picks(db_path, l
     taste = {float(value) for value in decode_vector(_taste(db_path, "alice")[2])}
     assert not any(leaf in taste for leaf in _leaves(payload) if not isinstance(leaf, str))
     assert not any(f"{value:.3f}" in text for value in taste if value)
+
+
+def test_the_provider_sees_only_the_last_four_messages_oldest_first(db_path):
+    provider = FakeProvider(NINETIES)
+    client = _logged_in(db_path, "alice", ChatConfig(provider=provider))
+    for message in ("first", "second", "third"):
+        client.post("/chat", json={"message": message})
+    provider.requests.clear()
+
+    client.post("/chat", json={"message": "fourth"})
+
+    [request] = provider.requests
+    assert [(turn.role, turn.content.split(maxsplit=1)[0]) for turn in request.turns] == [
+        ("user", "second"),
+        ("assistant", "Got"),
+        ("user", "third"),
+        ("assistant", "Got"),
+    ]
 
 
 @pytest.mark.parametrize(
@@ -360,8 +385,7 @@ def test_a_provider_call_past_the_deadline_is_still_recorded_as_usage(db_path):
 
 
 def test_chat_stops_calling_the_provider_once_the_monthly_cap_is_spent(db_path):
-    one_call = 100 * COST_PER_INPUT_TOKEN + 20 * COST_PER_OUTPUT_TOKEN
-    config = ChatConfig(provider=FakeProvider(NINETIES), monthly_cap_usd=0.9 * one_call)
+    config = ChatConfig(provider=FakeProvider(NINETIES), monthly_cap_usd=0.9 * COST_PER_CALL_USD)
     client = _logged_in(db_path, "alice", config)
 
     modes = [client.post("/chat", json={"message": "more"}).json()["mode"] for _ in range(2)]

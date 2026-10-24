@@ -60,10 +60,12 @@ class ChatConfig:
 
     @classmethod
     def from_env(cls) -> "ChatConfig":
+        timeout_s = DEFAULT_TIMEOUT_S
         return cls(
-            provider=provider_from_env(DEFAULT_TIMEOUT_S),
+            provider=provider_from_env(timeout_s),
             daily_cap=int(os.environ.get("MOFLIX_CHAT_DAILY_CAP", str(DEFAULT_DAILY_CAP))),
             monthly_cap_usd=monthly_cap_from_env(),
+            timeout_s=timeout_s,
         )
 
 

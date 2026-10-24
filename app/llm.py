@@ -8,11 +8,12 @@ Google, Meta and others, so `OPENROUTER_MODEL` picks both the upstream provider 
 
 Environment variables:
     OPENROUTER_API_KEY   the API key; without it chat runs in simple mode only
-    OPENROUTER_MODEL     optional, default anthropic/claude-3-haiku
+    OPENROUTER_MODEL     optional, one of MODEL_PRICES, default anthropic/claude-3-haiku
     MOFLIX_MONTHLY_CAP   optional USD spend cap per calendar month, default 5.0
 
-Costs are estimated from the token counts the API returns at Claude 3 Haiku prices: a close
-approximation for the default model, not billing figures.
+Costs are estimated from the token counts the API returns at the model's list price in
+`MODEL_PRICES`: close approximations, not billing figures. A model without a price there is
+refused, since the monthly cap could not hold for it.
 """
 
 import json
@@ -29,8 +30,12 @@ from app.intent import Intent
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 DEFAULT_MODEL = "anthropic/claude-3-haiku"
 DEFAULT_MONTHLY_CAP_USD = 5.0
-COST_PER_INPUT_TOKEN = 0.25 / 1_000_000
-COST_PER_OUTPUT_TOKEN = 1.25 / 1_000_000
+# USD per million (input, output) tokens, as listed on https://openrouter.ai/models.
+MODEL_PRICES = {
+    "anthropic/claude-3-haiku": (0.25, 1.25),
+    "anthropic/claude-3.5-haiku": (0.80, 4.00),
+    "anthropic/claude-haiku-4.5": (1.00, 5.00),
+}
 
 SYSTEM_PROMPT = f"""\
 You turn a movie-night chat message into a JSON object that matches this JSON Schema. \
@@ -66,6 +71,7 @@ class Completion:
     model: str
     input_tokens: int
     output_tokens: int
+    cost_usd: float
 
 
 class LLMProvider(Protocol):
@@ -78,6 +84,8 @@ class OpenRouterProvider:
     def __init__(self, api_key: str, model: str = DEFAULT_MODEL, *, timeout_s: float) -> None:
         from openai import OpenAI
 
+        if model not in MODEL_PRICES:
+            raise ValueError(f"No price is known for model {model!r}; add it to MODEL_PRICES")
         self.model = model
         # The turn stops waiting at its own deadline; this bounds how long the abandoned call
         # keeps a provider thread busy.
@@ -109,11 +117,15 @@ class OpenRouterProvider:
             response_format={"type": "json_object"},
         )
         usage = response.usage
+        input_tokens = usage.prompt_tokens if usage else 0
+        output_tokens = usage.completion_tokens if usage else 0
+        input_price, output_price = MODEL_PRICES[self.model]
         return Completion(
             text=response.choices[0].message.content or "",
             model=self.model,
-            input_tokens=usage.prompt_tokens if usage else 0,
-            output_tokens=usage.completion_tokens if usage else 0,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cost_usd=(input_tokens * input_price + output_tokens * output_price) / 1_000_000,
         )
 
 
@@ -141,10 +153,6 @@ def monthly_spend(conn: sqlite3.Connection, now: datetime) -> float:
 def record_usage(
     conn: sqlite3.Connection, completion: Completion, user_id: int, now: datetime
 ) -> None:
-    cost = (
-        completion.input_tokens * COST_PER_INPUT_TOKEN
-        + completion.output_tokens * COST_PER_OUTPUT_TOKEN
-    )
     conn.execute(
         "INSERT INTO llm_usage"
         " (called_at, model, input_tokens, output_tokens, cost_usd, user_id)"
@@ -154,7 +162,7 @@ def record_usage(
             completion.model,
             completion.input_tokens,
             completion.output_tokens,
-            cost,
+            completion.cost_usd,
             user_id,
         ),
     )
