@@ -1,0 +1,13 @@
+.git
+.env
+.env.*
+!.env.example
+*.db
+data/
+.venv/
+venv/
+__pycache__/
+*.pyc
+.tmdb_cache.json
+.factory/
+.factory-env
