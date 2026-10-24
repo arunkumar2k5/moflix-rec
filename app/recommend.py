@@ -12,7 +12,7 @@ from typing import Literal, get_args
 
 import numpy as np
 
-from app.db import decode_vector, load_movies, store_taste_vector
+from app.db import decode_vector, dismissals, load_movies, store_taste_vector
 from app.taste import DEFAULT_PARAMS, WatchEvent, build_base_taste_vector, event_weight
 from app.vectors import FULL_DIMENSION, GENRES, LAYOUT, VECTOR_VERSION, Movie
 
@@ -281,13 +281,9 @@ def watch_events(conn: sqlite3.Connection, user_id: int) -> list[WatchEvent]:
 
 
 def user_feedback(conn: sqlite3.Connection, user_id: int) -> Feedback:
-    rows = conn.execute(
-        "SELECT movie_id, action, created_at FROM feedback_events"
-        " WHERE user_id = ? AND action IN ('not_interested', 'already_seen') ORDER BY id",
-        (user_id,),
-    ).fetchall()
+    rows = dismissals(conn, user_id)
     not_interested = tuple(
-        WatchEvent(movie_id, not_interested=True, watched_at=datetime.fromisoformat(at))
+        WatchEvent(movie_id, not_interested=True, watched_at=at)
         for movie_id, action, at in rows
         if action == "not_interested"
     )

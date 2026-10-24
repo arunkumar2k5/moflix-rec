@@ -13,7 +13,13 @@ import numpy as np
 from app.auth import Role
 from app.vectors import Movie
 
-FeedbackAction = Literal["watch_tonight", "not_interested", "already_seen"]
+DismissalAction = Literal["not_interested", "already_seen"]
+FeedbackAction = Literal["watch_tonight", DismissalAction]
+
+
+def _sql_values(literal: object) -> str:
+    return ", ".join(repr(value) for value in get_args(literal))
+
 
 SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS users (
@@ -77,7 +83,7 @@ CREATE TABLE IF NOT EXISTS feedback_events (
     user_id INTEGER NOT NULL REFERENCES users(id),
     movie_id INTEGER NOT NULL REFERENCES movies(id),
     action TEXT NOT NULL
-        CHECK (action IN ({", ".join(repr(action) for action in get_args(FeedbackAction))})),
+        CHECK (action IN ({_sql_values(FeedbackAction)})),
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS feedback_events_user ON feedback_events(user_id);
@@ -207,20 +213,33 @@ def load_movies(conn: sqlite3.Connection) -> list[Movie]:
 
 
 def watch_tonight_movies(conn: sqlite3.Connection, user_id: int) -> list[Movie]:
-    """Movies the user saved for tonight, newest first, minus any they have since dismissed."""
+    """Movies the user saved for tonight, newest first, minus any dismissed since the last save."""
     return _decode_movies(
         conn.execute(
             f"SELECT {MOVIE_COLUMNS} FROM movies JOIN ("
             "  SELECT movie_id, MAX(id) AS saved FROM feedback_events"
             "  WHERE user_id = ? AND action = 'watch_tonight' GROUP BY movie_id"
             ") ON movie_id = id"
-            " WHERE id NOT IN ("
-            "  SELECT movie_id FROM feedback_events"
-            "  WHERE user_id = ? AND action IN ('not_interested', 'already_seen')"
+            " WHERE NOT EXISTS ("
+            "  SELECT 1 FROM feedback_events AS d"
+            "  WHERE d.user_id = ? AND d.movie_id = movies.id AND d.id > saved"
+            f"  AND d.action IN ({_sql_values(DismissalAction)})"
             ") ORDER BY saved DESC",
             (user_id, user_id),
         )
     )
+
+
+def dismissals(
+    conn: sqlite3.Connection, user_id: int
+) -> list[tuple[int, DismissalAction, datetime]]:
+    """The user's dismissal feedback as (movie_id, action, created_at), oldest first."""
+    rows = conn.execute(
+        "SELECT movie_id, action, created_at FROM feedback_events"
+        f" WHERE user_id = ? AND action IN ({_sql_values(DismissalAction)}) ORDER BY id",
+        (user_id,),
+    )
+    return [(movie_id, action, datetime.fromisoformat(at)) for movie_id, action, at in rows]
 
 
 def _decode_movies(cursor: sqlite3.Cursor) -> list[Movie]:

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 import numpy as np
 import pytest
@@ -7,8 +7,15 @@ from fastapi.testclient import TestClient
 from app.auth import set_password
 from app.db import connect, decode_vector
 from app.main import create_app
-from app.recommend import RankParams, load_library, recommend, watch_events
-from app.taste import WatchEvent, build_base_taste_vector
+from app.recommend import (
+    RankParams,
+    _user_context,
+    load_library,
+    recommend,
+    user_feedback,
+    watch_events,
+)
+from app.taste import DEFAULT_PARAMS, WatchEvent, build_base_taste_vector, event_weight
 
 PASSWORD = "correct horse battery staple"
 
@@ -170,6 +177,39 @@ def test_a_dismissed_movie_leaves_watch_tonight(db_path):
     _feedback(client, first, "already_seen")
 
     assert [item["movie_id"] for item in client.get("/feedback/watch-tonight").json()] == [second]
+
+
+def test_saving_a_movie_after_dismissing_it_lists_it_again(db_path):
+    client = _log_in(_client(db_path), "alice")
+    movie_a = _picks(client)[0]
+    _feedback(client, movie_a, "already_seen")
+
+    _feedback(client, movie_a, "watch_tonight")
+
+    assert [item["movie_id"] for item in client.get("/feedback/watch-tonight").json()] == [movie_a]
+    assert movie_a not in _picks(client)
+
+
+def test_a_liked_movie_marked_not_interested_is_never_named_as_enjoyed(db_path, library):
+    conn = connect(db_path)
+    user_id = conn.execute("SELECT id FROM users WHERE name = 'alice'").fetchone()[0]
+    now = datetime.now(timezone.utc)
+    events = watch_events(conn, user_id)
+    liked = next(e.movie_id for e in events if event_weight(e, now, DEFAULT_PARAMS) > 0)
+    conn.close()
+    client = _log_in(_client(db_path), "alice")
+
+    _feedback(client, liked, "not_interested")
+
+    conn = connect(db_path)
+    context = _user_context(
+        conn, user_id, events, user_feedback(conn, user_id), load_library(conn), now
+    )
+    conn.close()
+    assert liked not in {candidate.movie.id for candidate in context.liked}
+    title = next(movie["title"] for movie in library["movies"] if movie["id"] == liked)
+    reasons = [item["reason"] for item in client.get("/recommendations").json()["items"]]
+    assert reasons and not any(title in r and "enjoyed" in r for r in reasons)
 
 
 def test_unknown_action_is_rejected_and_nothing_is_stored(db_path):
