@@ -9,6 +9,7 @@ from app.auth import set_password
 from app.db import connect, insert_movie, store_vector
 from app.main import create_app
 from app.recommend import (
+    DEFAULT_COLD_START_MIN,
     LibraryCache,
     RankParams,
     load_library,
@@ -21,13 +22,13 @@ from app.vectors import FULL_DIMENSION, GENRES, VECTOR_VERSION, Movie
 PASSWORD = "correct horse battery staple"
 
 
-def _client(db_path, top_n=3):
+def _client(db_path, top_n=3, cold_start_min=DEFAULT_COLD_START_MIN):
     # The session cookie is Secure, so the client only sends it back over https.
-    return TestClient(create_app(db_path, top_n), base_url="https://testserver")
+    return TestClient(create_app(db_path, top_n, cold_start_min), base_url="https://testserver")
 
 
-def _logged_in(db_path, name, top_n=3):
-    client = _client(db_path, top_n)
+def _logged_in(db_path, name, top_n=3, cold_start_min=DEFAULT_COLD_START_MIN):
+    client = _client(db_path, top_n, cold_start_min)
     response = client.post("/auth/login", json={"username": name, "password": PASSWORD})
     assert response.status_code == 200
     return client
@@ -106,16 +107,95 @@ def test_each_call_logs_every_shown_pick_for_the_session_user_only(db_path):
     assert _log(db_path) == [("bob", movie_id) for movie_id in first + second]
 
 
-def test_user_without_history_gets_an_empty_cold_start_response(db_path):
+def _add_carol(db_path, *watched):
     conn = connect(db_path)
     set_password(conn, "carol", PASSWORD, "user")
+    carol_id = conn.execute("SELECT id FROM users WHERE name = 'carol'").fetchone()[0]
+    with conn:
+        conn.executemany(
+            "INSERT INTO watch_events (user_id, movie_id) VALUES (?, ?)",
+            [(carol_id, movie_id) for movie_id in watched],
+        )
     conn.close()
+    return carol_id
+
+
+def test_user_without_history_gets_popular_picks_and_an_onboarding_prompt(db_path):
+    _add_carol(db_path)
 
     response = _logged_in(db_path, "carol").get("/recommendations")
 
     assert response.status_code == 200
-    assert response.json() == {"items": [], "cold_start": True}
-    assert _log(db_path) == []
+    body = response.json()
+    assert body["cold_start"] is True
+    assert isinstance(body["onboarding_prompt"], str) and body["onboarding_prompt"]
+    assert len(body["items"]) >= 2
+    for item in body["items"]:
+        assert item["title"]
+        assert isinstance(item["year"], int)
+        assert item["genres"]
+        assert item["reason"]
+    # The highest rated fixture movies, ties to the lower id.
+    assert [item["movie_id"] for item in body["items"]] == [1, 8, 10]
+    assert _log(db_path) == [("carol", 1), ("carol", 8), ("carol", 10)]
+
+
+def test_cold_start_picks_ignore_other_users_history(db_path):
+    _add_carol(db_path)
+    before = _logged_in(db_path, "carol").get("/recommendations").json()["items"]
+
+    conn = connect(db_path)
+    with conn:
+        for name in ("alice", "bob"):
+            user_id = conn.execute("SELECT id FROM users WHERE name = ?", (name,)).fetchone()[0]
+            conn.executemany(
+                "INSERT INTO watch_events (user_id, movie_id, play_count, favourite)"
+                " VALUES (?, ?, 50, 1)",
+                [(user_id, movie_id) for movie_id in (1, 8, 10, 22)],
+            )
+    conn.close()
+    after = _logged_in(db_path, "carol").get("/recommendations").json()["items"]
+
+    assert after == before
+
+
+def test_user_with_exactly_cold_start_min_movies_is_not_cold_start(db_path, library):
+    assert len(_watched(library, "bob")) == 5
+
+    body = _logged_in(db_path, "bob").get("/recommendations").json()
+
+    assert body["cold_start"] is False
+    assert body["onboarding_prompt"] is None
+
+
+@pytest.mark.parametrize(("cold_start_min", "cold_start"), [(2, False), (6, True)])
+def test_cold_start_min_sets_the_threshold(db_path, cold_start_min, cold_start):
+    client = _logged_in(db_path, "bob", cold_start_min=cold_start_min)
+
+    body = client.get("/recommendations").json()
+
+    assert body["cold_start"] is cold_start
+    assert (body["onboarding_prompt"] is not None) is cold_start
+
+
+def test_sparse_history_excludes_watched_movies_and_stores_a_taste_vector(db_path):
+    carol_id = _add_carol(db_path, 1, 8)
+
+    body = _logged_in(db_path, "carol").get("/recommendations").json()
+
+    assert body["cold_start"] is True
+    assert body["onboarding_prompt"]
+    assert len(body["items"]) == 3
+    assert {item["movie_id"] for item in body["items"]}.isdisjoint({1, 8})
+    conn = connect(db_path)
+    stored = conn.execute("SELECT 1 FROM taste_vectors WHERE user_id = ?", (carol_id,)).fetchall()
+    conn.close()
+    assert stored
+
+
+def test_cold_start_min_must_be_positive(db_path):
+    with pytest.raises(ValueError, match="cold_start_min"):
+        create_app(db_path, cold_start_min=0)
 
 
 def _sync_movie_alice_watched(db_path, library):
