@@ -73,9 +73,6 @@ class Library:
             unit=_unit_rows(matrix),
         )
 
-    def vectors(self) -> dict[int, np.ndarray]:
-        return {movie_id: c.vector for movie_id, c in self.by_id.items()}
-
 
 @dataclass(frozen=True)
 class Constraints:
@@ -320,10 +317,11 @@ def recommend_for_user(
     events = _watch_events(conn, user_id)
     if not events:
         raise NoWatchHistory("no watch history to build a taste vector from")
-    taste = build_base_taste_vector(events, library.vectors(), now)
+    candidates = library.by_id
+    watched_vectors = {e.movie_id: candidates[e.movie_id].vector for e in events}
+    taste = build_base_taste_vector(events, watched_vectors, now)
     with conn:
         store_taste_vector(conn, user_id, VECTOR_VERSION, taste, now)
-    candidates = library.by_id
     liked_ids = {e.movie_id for e in events if event_weight(e, now, DEFAULT_PARAMS) > 0}
     excluded_ids = frozenset(event.movie_id for event in events)
     user_ctx = UserContext(
