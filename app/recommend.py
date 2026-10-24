@@ -4,7 +4,7 @@ Everything here reads SQLite and computes with NumPy only: ranking never touches
 """
 
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from threading import Lock
@@ -312,8 +312,12 @@ def recommend_for_user(
     params: RankParams = DEFAULT_RANK_PARAMS,
     constraints: Constraints = NO_CONSTRAINTS,
     now: datetime | None = None,
+    tune: Callable[[np.ndarray], np.ndarray] | None = None,
 ) -> list[Recommendation]:
-    """Rank the user's unseen movies, recording the taste vector built at `now`.
+    """Rank the user's unseen movies, recording the base taste vector built at `now`.
+
+    `tune` maps the base taste vector to the one ranked with, such as a blend with the chat
+    session vector; the recorded vector is always the untuned base.
 
     Read `events` before taking `library`: a sync commits a movie's vector together with any
     event for it, so only that order guarantees every watched movie is in the library.
@@ -329,7 +333,7 @@ def recommend_for_user(
     liked_ids = {e.movie_id for e in events if event_weight(e, now, DEFAULT_PARAMS) > 0}
     excluded_ids = frozenset(event.movie_id for event in events)
     user_ctx = UserContext(
-        taste=taste,
+        taste=taste if tune is None else tune(taste),
         excluded_ids=excluded_ids,
         liked=tuple(candidates[movie_id] for movie_id in sorted(liked_ids)),
         passed=tuple(candidates[movie_id] for movie_id in sorted(excluded_ids - liked_ids)),
