@@ -38,9 +38,4 @@ LOG_CONFIG: dict[str, Any] = {
         }
     },
     "root": {"handlers": ["stdout"], "level": "INFO"},
-    "loggers": {
-        "uvicorn": {"level": "INFO"},
-        "uvicorn.error": {"level": "INFO"},
-        "uvicorn.access": {"level": "INFO"},
-    },
 }
