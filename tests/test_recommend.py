@@ -300,6 +300,21 @@ def test_an_empty_language_set_leaves_languages_unconstrained():
     assert {r.movie_id for r in results} == {1, 2}
 
 
+def test_terms_match_titles_and_keywords_case_insensitively():
+    candidates = [
+        _candidate(1, [1.0], "Iron Man", keywords=("superhero", "Marvel Cinematic Universe")),
+        _candidate(2, [1.0], "Marvel's The Avengers"),
+        _candidate(3, [1.0], "Heat", keywords=("heist",)),
+        _candidate(4, [1.0], "Thor", keywords=("superhero",)),
+    ]
+
+    def picked(constraints: Constraints) -> set[int]:
+        return {r.movie_id for r in rank(_context([1.0]), candidates, constraints, RankParams())}
+
+    assert picked(Constraints(excluded_terms=frozenset({"marvel"}))) == {3, 4}
+    assert picked(Constraints(required_terms=frozenset({"SUPERHERO", "marvel"}))) == {1}
+
+
 def test_language_rating_and_genre_constraints_all_apply(seeded_db, library):
     _, conn = seeded_db
     movies = _movies_by_id(library)

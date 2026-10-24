@@ -3,7 +3,7 @@
 import hashlib
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal, get_args
 
 import numpy as np
 
@@ -16,7 +16,7 @@ VECTOR_VERSION = 2
 EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
 EMBEDDING_DIM = 384
 
-GENRES = (
+Genre = Literal[
     "Action",
     "Adventure",
     "Animation",
@@ -35,7 +35,8 @@ GENRES = (
     "Thriller",
     "War",
     "Western",
-)
+]
+GENRES: tuple[Genre, ...] = get_args(Genre)
 # Lower bound of each decade bucket; years before the first bucket fall into it.
 DECADES = (1950, 1960, 1970, 1980, 1990, 2000, 2010, 2020)
 # Upper bound (exclusive, minutes) of each runtime bucket but the last.
