@@ -1,14 +1,16 @@
 import json
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
 from app.auth import set_password
-from app.chat import SIMPLE_MODE_NOTICE, ChatConfig, merge
+from app.chat import SIMPLE_MODE_NOTICE, ChatConfig, active_session, merge
 from app.db import connect, decode_vector, insert_movie, store_vector
-from app.llm import Completion, IntentRequest
+from app.llm import COST_PER_INPUT_TOKEN, COST_PER_OUTPUT_TOKEN, Completion, IntentRequest
 from app.main import create_app
 from app.recommend import Constraints
 from app.vectors import FULL_DIMENSION, GENRES, VECTOR_VERSION, Movie
@@ -73,6 +75,13 @@ def _taste(db_path, name):
     ).fetchone()
     conn.close()
     return row
+
+
+def _usage(db_path):
+    conn = connect(db_path)
+    rows = conn.execute("SELECT model, input_tokens, output_tokens FROM llm_usage").fetchall()
+    conn.close()
+    return rows
 
 
 def _is_json(text):
@@ -187,10 +196,7 @@ def test_each_provider_call_is_recorded_as_usage(db_path):
 
     client.post("/chat", json={"message": "something from the 1990s"})
 
-    conn = connect(db_path)
-    rows = conn.execute("SELECT model, input_tokens, output_tokens FROM llm_usage").fetchall()
-    conn.close()
-    assert rows == [("fake", 100, 20)]
+    assert _usage(db_path) == [("fake", 100, 20)]
 
 
 def test_reset_restores_the_untuned_picks_and_never_touches_the_base_vector(db_path, library):
@@ -289,3 +295,115 @@ def test_later_constraints_override_earlier_ones():
     assert merge(earlier, Constraints(max_runtime=90)) == Constraints(
         max_runtime=90, year_range=(1990, 1999), required_genres=frozenset({"Horror"})
     )
+
+
+class MeetingProvider(FakeProvider):
+    """Holds each call until `parties` calls are in flight, so their turns overlap."""
+
+    def __init__(self, *replies: str, parties: int) -> None:
+        super().__init__(*replies)
+        self.barrier = threading.Barrier(parties, timeout=2.0)
+
+    def complete(self, request: IntentRequest) -> Completion:
+        completion = super().complete(request)
+        self.barrier.wait()
+        return completion
+
+
+def _concurrently(clients, messages):
+    with ThreadPoolExecutor(len(clients)) as pool:
+        calls = [
+            pool.submit(client.post, "/chat", json={"message": message})
+            for client, message in zip(clients, messages, strict=True)
+        ]
+        return [call.result() for call in calls]
+
+
+def test_concurrent_turns_of_one_user_both_apply(db_path):
+    config = ChatConfig(provider=MeetingProvider(NINETIES, ONLY_HORROR, parties=2))
+    clients = [_logged_in(db_path, "alice", config) for _ in range(2)]
+
+    responses = _concurrently(clients, ["something from the 1990s", "only horror"])
+
+    assert [response.status_code for response in responses] == [200, 200]
+    conn = connect(db_path)
+    user_id = conn.execute("SELECT id FROM users WHERE name = 'alice'").fetchone()[0]
+    session = active_session(conn, user_id)
+    messages = conn.execute("SELECT COUNT(*) FROM chat_messages").fetchone()[0]
+    conn.close()
+    assert session.constraints.year_range == (1990, 1999)
+    assert session.constraints.required_genres == {"Horror"}
+    assert messages == 4
+
+
+def test_concurrent_turns_cannot_exceed_the_daily_cap(db_path):
+    config = ChatConfig(provider=MeetingProvider(NINETIES, parties=2), daily_cap=1)
+    clients = [_logged_in(db_path, "alice", config) for _ in range(2)]
+
+    responses = _concurrently(clients, ["more", "more"])
+
+    assert sorted(response.status_code for response in responses) == [200, 429]
+
+
+def test_a_provider_call_past_the_deadline_is_still_recorded_as_usage(db_path):
+    provider = FakeProvider(NINETIES, delay_s=0.3)
+    client = _logged_in(db_path, "alice", ChatConfig(provider=provider, timeout_s=0.05))
+
+    assert client.post("/chat", json={"message": "more"}).json()["mode"] == "simple"
+
+    deadline = time.monotonic() + 3.0
+    while not _usage(db_path) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert _usage(db_path) == [("fake", 100, 20)]
+
+
+def test_chat_stops_calling_the_provider_once_the_monthly_cap_is_spent(db_path):
+    one_call = 100 * COST_PER_INPUT_TOKEN + 20 * COST_PER_OUTPUT_TOKEN
+    config = ChatConfig(provider=FakeProvider(NINETIES), monthly_cap_usd=0.9 * one_call)
+    client = _logged_in(db_path, "alice", config)
+
+    modes = [client.post("/chat", json={"message": "more"}).json()["mode"] for _ in range(2)]
+
+    assert modes == ["ai", "simple"]
+
+
+def test_the_daily_cap_counts_only_todays_messages(db_path):
+    client = _logged_in(db_path, "alice", ChatConfig(provider=FakeProvider(NINETIES), daily_cap=1))
+    assert client.post("/chat", json={"message": "more"}).status_code == 200
+    assert client.post("/chat", json={"message": "more"}).status_code == 429
+
+    conn = connect(db_path)
+    with conn:
+        conn.execute("UPDATE chat_messages SET sent_at = ?", ("2000-01-01T12:00:00+00:00",))
+    conn.close()
+
+    assert client.post("/chat", json={"message": "more"}).status_code == 200
+
+
+def test_a_session_from_an_older_vector_layout_is_set_aside(db_path):
+    client = _logged_in(db_path, "alice", ChatConfig(provider=FakeProvider(ONLY_HORROR)))
+    baseline = _ids(client.get("/recommendations"))
+    client.post("/chat", json={"message": "only horror movies please"})
+    conn = connect(db_path)
+    with conn:
+        conn.execute(
+            "UPDATE chat_sessions SET vector_version = ?, dimension = 3, session_vector = ?",
+            (VECTOR_VERSION - 1, np.zeros(3).tobytes()),
+        )
+    conn.close()
+
+    assert _ids(client.get("/recommendations")) == baseline
+    assert client.post("/chat", json={"message": "only horror movies please"}).status_code == 200
+
+
+def test_a_user_without_watch_history_is_told_chat_has_nothing_to_tune(db_path):
+    conn = connect(db_path)
+    set_password(conn, "carol", PASSWORD, "user")
+    conn.close()
+    client = _logged_in(db_path, "carol", ChatConfig(provider=FakeProvider(NINETIES)))
+
+    body = client.post("/chat", json={"message": "something from the 1990s"}).json()
+
+    assert body["items"] == []
+    assert body["cold_start"] is True
+    assert body["mode"] == "ai"

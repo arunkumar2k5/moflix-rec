@@ -76,6 +76,8 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
     user_id INTEGER NOT NULL REFERENCES users(id),
     started_at TEXT NOT NULL,
     ended_at TEXT,
+    vector_version INTEGER NOT NULL,
+    dimension INTEGER NOT NULL,
     session_vector BLOB NOT NULL,
     constraints TEXT NOT NULL
 );

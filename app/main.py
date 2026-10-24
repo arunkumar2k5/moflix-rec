@@ -92,6 +92,7 @@ class ChatReply(BaseModel):
     understood: Intent
     items: list[RecommendedMovie]
     mode: Mode
+    cold_start: bool  # as for Recommendations
 
 
 class ChangePassword(BaseModel):
@@ -287,26 +288,40 @@ def create_app(
         body: ChatMessage, conn: Db, user: Annotated[User, Depends(current_user)]
     ) -> ChatReply:
         now = utc_now()
-        if chat.messages_today(conn, user.id, now) >= chat_config.daily_cap:
-            raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "daily chat limit reached")
-        events = watch_events(conn, user.id)
-        loaded = current_library(conn)
-        session = chat.active_session(conn, user.id) or Session()
-        request = IntentRequest(
-            message=body.message,
-            turns=chat.recent_turns(conn, session),
-            picks=chat.shown_picks(conn, user.id, loaded),
-        )
-        intent, mode = chat.parse_intent(chat_config, conn, request, user.id, now)
-        session = chat.tuned(session, intent, loaded)
+        try:
+            # Checked before the provider call too, so a refused message costs nothing.
+            chat.check_daily_cap(conn, user.id, now, chat_config.daily_cap)
+            events = watch_events(conn, user.id)
+            loaded = current_library(conn)
+            session = chat.active_session(conn, user.id) or Session()
+            request = IntentRequest(
+                message=body.message,
+                turns=chat.recent_turns(conn, session),
+                picks=chat.shown_picks(conn, user.id, loaded),
+            )
+            intent, mode = chat.parse_intent(
+                chat_config, conn, request, user.id, now, db_path=app.state.db_path
+            )
+            reply = chat.describe(intent, mode)
+            session = chat.commit_turn(
+                conn,
+                user.id,
+                intent,
+                loaded,
+                body.message,
+                reply,
+                now=now,
+                daily_cap=chat_config.daily_cap,
+            )
+        except chat.DailyCapReached:
+            raise HTTPException(
+                status.HTTP_429_TOO_MANY_REQUESTS, "daily chat limit reached"
+            ) from None
         try:
             items = picks(conn, user, events, loaded, session)
         except NoWatchHistory:
-            items = []
-        reply = chat.describe(intent, mode)
-        with conn:
-            chat.save_turn(conn, user.id, session, body.message, reply, now)
-        return ChatReply(reply=reply, understood=intent, items=items, mode=mode)
+            return ChatReply(reply=reply, understood=intent, items=[], mode=mode, cold_start=True)
+        return ChatReply(reply=reply, understood=intent, items=items, mode=mode, cold_start=False)
 
     @app.post("/chat/reset", status_code=status.HTTP_204_NO_CONTENT)
     def reset_chat(conn: Db, user: Annotated[User, Depends(current_user)]) -> None:

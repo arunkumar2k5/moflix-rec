@@ -10,15 +10,17 @@ import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from datetime import datetime
+from pathlib import Path
 from typing import Literal
 
 import numpy as np
 from pydantic import TypeAdapter, ValidationError
 
-from app.db import VECTOR_DTYPE, decode_vector
+from app.db import VECTOR_DTYPE, connect, decode_vector
 from app.intent import Intent, apply_intent, blend
 from app.llm import (
     DEFAULT_MONTHLY_CAP_USD,
+    Completion,
     IntentRequest,
     LLMProvider,
     Pick,
@@ -31,7 +33,7 @@ from app.llm import (
 from app.logs import logger
 from app.recommend import NO_CONSTRAINTS, Constraints, Library
 from app.simple_parse import simple_parse
-from app.vectors import FULL_DIMENSION
+from app.vectors import FULL_DIMENSION, VECTOR_VERSION
 
 Mode = Literal["ai", "simple"]
 
@@ -43,6 +45,10 @@ CONTEXT_TURNS = 4
 _constraints_json = TypeAdapter(Constraints)
 # Lets a turn give up on a provider that overruns its deadline instead of waiting it out.
 _provider_calls = ThreadPoolExecutor(max_workers=4, thread_name_prefix="llm")
+
+
+class DailyCapReached(Exception):
+    pass
 
 
 @dataclass(frozen=True)
@@ -72,10 +78,11 @@ class Session:
 
 
 def active_session(conn: sqlite3.Connection, user_id: int) -> Session | None:
+    """The user's active session, or None if there is none or its vector predates the layout."""
     row = conn.execute(
         "SELECT id, session_vector, constraints FROM chat_sessions"
-        " WHERE user_id = ? AND ended_at IS NULL",
-        (user_id,),
+        " WHERE user_id = ? AND ended_at IS NULL AND vector_version = ? AND dimension = ?",
+        (user_id, VECTOR_VERSION, FULL_DIMENSION),
     ).fetchone()
     if row is None:
         return None
@@ -89,13 +96,15 @@ def end_session(conn: sqlite3.Connection, user_id: int, now: datetime) -> None:
     )
 
 
-def messages_today(conn: sqlite3.Connection, user_id: int, now: datetime) -> int:
-    row = conn.execute(
+def check_daily_cap(conn: sqlite3.Connection, user_id: int, now: datetime, cap: int) -> None:
+    """Raises DailyCapReached if the user has already sent `cap` messages today (UTC)."""
+    sent_today = conn.execute(
         "SELECT COUNT(*) FROM chat_messages m JOIN chat_sessions s ON s.id = m.session_id"
         " WHERE s.user_id = ? AND m.role = 'user' AND m.sent_at >= ?",
         (user_id, f"{now:%Y-%m-%d}"),
-    ).fetchone()
-    return row[0]
+    ).fetchone()[0]
+    if sent_today >= cap:
+        raise DailyCapReached
 
 
 def recent_turns(conn: sqlite3.Connection, session: Session) -> list[Turn]:
@@ -117,7 +126,35 @@ def shown_picks(conn: sqlite3.Connection, user_id: int, library: Library) -> lis
     return [Pick(title=m.title, year=m.year, genres=list(m.genres)) for m in movies]
 
 
-def save_turn(
+def commit_turn(
+    conn: sqlite3.Connection,
+    user_id: int,
+    intent: Intent,
+    library: Library,
+    message: str,
+    reply: str,
+    *,
+    now: datetime,
+    daily_cap: int,
+) -> Session:
+    """Applies `intent` to the user's active session and stores the turn, as one write
+    transaction so that concurrent turns of one user each apply and count against the cap.
+
+    Raises DailyCapReached.
+    """
+    with conn:
+        conn.execute("BEGIN IMMEDIATE")
+        check_daily_cap(conn, user_id, now, daily_cap)
+        current = active_session(conn, user_id)
+        if current is None:
+            # A session whose vector predates the current layout may still be active.
+            end_session(conn, user_id, now)
+        session = tuned(current or Session(), intent, library)
+        _save_turn(conn, user_id, session, message, reply, now)
+    return session
+
+
+def _save_turn(
     conn: sqlite3.Connection,
     user_id: int,
     session: Session,
@@ -129,9 +166,10 @@ def save_turn(
     constraints = _constraints_json.dump_json(session.constraints).decode()
     if session.id is None:
         session_id = conn.execute(
-            "INSERT INTO chat_sessions (user_id, started_at, session_vector, constraints)"
-            " VALUES (?, ?, ?, ?)",
-            (user_id, now.isoformat(), vector, constraints),
+            "INSERT INTO chat_sessions"
+            " (user_id, started_at, vector_version, dimension, session_vector, constraints)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (user_id, now.isoformat(), VECTOR_VERSION, len(session.vector), vector, constraints),
         ).lastrowid
     else:
         session_id = session.id
@@ -154,25 +192,43 @@ def parse_intent(
     request: IntentRequest,
     user_id: int,
     now: datetime,
+    *,
+    db_path: str | Path,
 ) -> tuple[Intent, Mode]:
     if config.provider is None:
         return simple_parse(request.message), "simple"
     if monthly_spend(conn, now) >= config.monthly_cap_usd:
         logger.warning("llm_monthly_cap_reached")
         return simple_parse(request.message), "simple"
+    call = _provider_calls.submit(_complete, config.provider, request, db_path, user_id, now)
     try:
-        call = _provider_calls.submit(config.provider.complete, request)
         completion = call.result(timeout=config.timeout_s)
     except Exception:
+        call.cancel()
         logger.warning("llm_unavailable", exc_info=True)
         return simple_parse(request.message), "simple"
-    with conn:
-        record_usage(conn, completion, user_id, now)
     try:
         return Intent.model_validate_json(completion.text), "ai"
     except ValidationError:
         logger.warning("llm_invalid_intent", exc_info=True)
         return simple_parse(request.message), "simple"
+
+
+def _complete(
+    provider: LLMProvider, request: IntentRequest, db_path: str | Path, user_id: int, now: datetime
+) -> Completion:
+    """Runs on a provider thread, so the spend is recorded even when the turn stops waiting."""
+    completion = provider.complete(request)
+    try:
+        conn = connect(db_path)
+        try:
+            with conn:
+                record_usage(conn, completion, user_id, now)
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        logger.exception("llm_usage_unrecorded")
+    return completion
 
 
 def tuned(session: Session, intent: Intent, library: Library) -> Session:
