@@ -4,7 +4,7 @@ Everything here reads SQLite and computes with NumPy only: ranking never touches
 """
 
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from threading import Lock
@@ -17,6 +17,8 @@ from app.taste import DEFAULT_PARAMS, WatchEvent, build_base_taste_vector, event
 from app.vectors import FULL_DIMENSION, GENRES, LAYOUT, VECTOR_VERSION, Movie
 
 Similarity = Literal["dot", "cosine"]
+# Maps the base taste vector to the one ranked with, such as a blend with the chat session vector.
+Tune = Callable[[np.ndarray], np.ndarray]
 
 
 class RecommendError(Exception):
@@ -120,10 +122,7 @@ def rank(
 
     Picked greedily by MMR; equal objectives go to the higher score, then the lower movie id.
     """
-    eligible = ~np.isin(library.ids, list(user_ctx.excluded_ids))
-    if constraints != NO_CONSTRAINTS:
-        eligible &= [_passes(c.movie, constraints) for c in library.candidates]
-    rows = np.flatnonzero(eligible)
+    rows = _eligible_rows(library, user_ctx.excluded_ids, constraints)
     if not len(rows):
         return []
     scores = _scores(user_ctx.taste, library, params.similarity)
@@ -139,6 +138,16 @@ def rank(
         )
         for i in picks
     ]
+
+
+def _eligible_rows(
+    library: Library, excluded_ids: frozenset[int], constraints: Constraints
+) -> np.ndarray:
+    """Rows of the candidates the user has no event for and that pass every constraint."""
+    eligible = ~np.isin(library.ids, list(excluded_ids))
+    if constraints != NO_CONSTRAINTS:
+        eligible &= [_passes(c.movie, constraints) for c in library.candidates]
+    return np.flatnonzero(eligible)
 
 
 def _passes(movie: Movie, constraints: Constraints) -> bool:
@@ -313,8 +322,10 @@ def recommend_for_user(
     params: RankParams = DEFAULT_RANK_PARAMS,
     constraints: Constraints = NO_CONSTRAINTS,
     now: datetime | None = None,
+    tune: Tune | None = None,
 ) -> list[Recommendation]:
-    """Rank the user's unseen movies, recording the taste vector built at `now`.
+    """Rank the user's unseen movies by their taste after `tune`, recording the untuned base
+    taste vector built at `now`.
 
     Read `events` before taking `library`: a sync commits a movie's vector together with any
     event for it, so only that order guarantees every watched movie is in the library.
@@ -322,7 +333,8 @@ def recommend_for_user(
     now = now or datetime.now(timezone.utc)
     if not events:
         raise NoWatchHistory("no watch history to build a taste vector from")
-    return rank(_user_context(conn, user_id, events, library, now), library, constraints, params)
+    user_ctx = _user_context(conn, user_id, events, library, now, tune)
+    return rank(user_ctx, library, constraints, params)
 
 
 def recommend_cold_start(
@@ -332,7 +344,9 @@ def recommend_cold_start(
     library: Library,
     params: RankParams = DEFAULT_RANK_PARAMS,
     cold_start_min: int = DEFAULT_COLD_START_MIN,
+    constraints: Constraints = NO_CONSTRAINTS,
     now: datetime | None = None,
+    tune: Tune | None = None,
 ) -> list[Recommendation]:
     """Popular unseen movies blended with whatever taste signal exists (FR-16).
 
@@ -341,15 +355,16 @@ def recommend_cold_start(
     community rating and nothing else; the library has no vote count, and play counts are other
     users' histories. Picks keep popularity order, so there is no MMR here.
 
-    Read `events` before taking `library`, as for `recommend_for_user`.
+    Constraints and `tune` apply as for `recommend_for_user`. Read `events` before taking
+    `library`, as for `recommend_for_user`.
     """
     now = now or datetime.now(timezone.utc)
-    excluded = {e.movie_id for e in events}
-    rows = np.flatnonzero(~np.isin(library.ids, list(excluded)))
+    excluded = frozenset(e.movie_id for e in events)
+    rows = _eligible_rows(library, excluded, constraints)
     if not len(rows):
         return []
     popularity = np.clip([c.movie.rating for c in library.candidates], 0.0, 10.0)[rows] / 10
-    user_ctx = _user_context(conn, user_id, events, library, now) if events else None
+    user_ctx = _user_context(conn, user_id, events, library, now, tune) if events else None
     relevance = np.zeros(len(rows))
     if user_ctx is not None:
         scores = _scores(user_ctx.taste, library, params.similarity)[rows]
@@ -385,8 +400,10 @@ def _user_context(
     events: Sequence[WatchEvent],
     library: Library,
     now: datetime,
+    tune: Tune | None = None,
 ) -> UserContext:
-    """The user's taste built at `now` from their events, recording it as a side effect."""
+    """The user's taste built at `now` from their events and then tuned, recording the untuned
+    base taste as a side effect."""
     candidates = library.by_id
     watched_vectors = {e.movie_id: candidates[e.movie_id].vector for e in events}
     taste = build_base_taste_vector(events, watched_vectors, now)
@@ -395,7 +412,7 @@ def _user_context(
     liked_ids = {e.movie_id for e in events if event_weight(e, now, DEFAULT_PARAMS) > 0}
     excluded_ids = frozenset(event.movie_id for event in events)
     return UserContext(
-        taste=taste,
+        taste=taste if tune is None else tune(taste),
         excluded_ids=excluded_ids,
         liked=tuple(candidates[movie_id] for movie_id in sorted(liked_ids)),
         passed=tuple(candidates[movie_id] for movie_id in sorted(excluded_ids - liked_ids)),
