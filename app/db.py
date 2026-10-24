@@ -1,11 +1,13 @@
-"""SQLite storage for users, sessions, movies, vectors, watch history, taste vectors and picks."""
+"""SQLite storage for users, sessions, movies, vectors, watch history, taste vectors, picks
+and feedback on picks."""
 
 import json
 import sqlite3
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import get_args
+from typing import Literal, get_args
 
 import numpy as np
 
@@ -89,6 +91,21 @@ USER_AUTH_COLUMNS = {
     f" CHECK (role IN ({', '.join(repr(role) for role in get_args(Role))}))",
 }
 
+FeedbackAction = Literal["watch_tonight", "not_interested", "already_seen"]
+
+# Append-only: a user's current action on a movie is the one in their newest row for it.
+FEEDBACK_SCHEMA = f"""
+CREATE TABLE IF NOT EXISTS feedback_events (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    movie_id INTEGER NOT NULL REFERENCES movies(id),
+    action TEXT NOT NULL
+        CHECK (action IN ({", ".join(repr(action) for action in get_args(FeedbackAction))})),
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS feedback_events_user ON feedback_events(user_id, movie_id);
+"""
+
 # Vectors are stored as raw little-endian float64 bytes.
 VECTOR_DTYPE = np.dtype("<f8")
 
@@ -97,6 +114,7 @@ def connect(path: str | Path, check_same_thread: bool = True) -> sqlite3.Connect
     conn = sqlite3.connect(path, check_same_thread=check_same_thread)
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA)
+    conn.executescript(FEEDBACK_SCHEMA)
     _add_missing_columns(conn, "users", USER_AUTH_COLUMNS)
     _add_missing_columns(conn, "watch_events", WATCH_SIGNAL_COLUMNS)
     _add_missing_columns(conn, "movies", {"poster_url": "TEXT NOT NULL DEFAULT ''"})
@@ -169,6 +187,39 @@ def log_recommendations(
         "INSERT INTO recommendation_log (user_id, movie_id, shown_at) VALUES (?, ?, ?)",
         [(user_id, movie_id, shown_at.isoformat()) for movie_id in movie_ids],
     )
+
+
+@dataclass(frozen=True)
+class Feedback:
+    movie_id: int
+    action: FeedbackAction
+    created_at: datetime
+
+
+def record_feedback(
+    conn: sqlite3.Connection,
+    user_id: int,
+    movie_id: int,
+    action: FeedbackAction,
+    created_at: datetime,
+) -> None:
+    conn.execute(
+        "INSERT INTO feedback_events (user_id, movie_id, action, created_at) VALUES (?, ?, ?, ?)",
+        (user_id, movie_id, action, created_at.isoformat()),
+    )
+
+
+def current_feedback(conn: sqlite3.Connection, user_id: int) -> list[Feedback]:
+    """The user's latest action on each movie they gave feedback on, oldest first."""
+    rows = conn.execute(
+        "SELECT movie_id, action, created_at FROM feedback_events WHERE id IN"
+        " (SELECT MAX(id) FROM feedback_events WHERE user_id = ? GROUP BY movie_id) ORDER BY id",
+        (user_id,),
+    )
+    return [
+        Feedback(movie_id, action, datetime.fromisoformat(created_at))
+        for movie_id, action, created_at in rows
+    ]
 
 
 def decode_vector(blob: bytes) -> np.ndarray:

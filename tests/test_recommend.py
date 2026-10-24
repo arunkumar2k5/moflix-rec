@@ -12,12 +12,14 @@ from app.db import (
     decode_vector,
     insert_movie,
     load_movies,
+    record_feedback,
     store_vector,
 )
 from app.recommend import (
     Candidate,
     Constraints,
     Library,
+    NoWatchHistory,
     RankParams,
     RecommendError,
     UserContext,
@@ -522,3 +524,69 @@ def test_watch_signal_columns_and_their_defaults_match_watch_event():
     conn.execute("INSERT INTO watch_events (user_id, movie_id) VALUES (?, 1)", (user_id,))
 
     assert watch_events(conn, user_id) == [WatchEvent(movie_id=1)]
+
+
+def test_not_interested_feedback_subtracts_from_the_stored_taste_vector():
+    conn, user_id = _small_library_db()
+    _insert_events(conn, user_id, (2, 0))
+    a_month_ago = NOW - timedelta(days=30)
+    record_feedback(conn, user_id, 4, "not_interested", a_month_ago)
+    expected = build_base_taste_vector(
+        [WatchEvent(2), WatchEvent(4, not_interested=True, watched_at=a_month_ago)],
+        SMALL_LIBRARY,
+        NOW,
+    )
+
+    results = recommend(conn, "dana", RankParams(top_n=3), now=NOW)
+
+    assert decode_vector(_stored_taste(conn, "dana")[2]).tobytes() == expected.tobytes()
+    assert {r.movie_id for r in results} == {1, 3, 5}
+    assert all("Movie 4" not in r.reason for r in results)
+
+
+def test_already_seen_feedback_excludes_without_changing_taste():
+    conn, user_id = _small_library_db()
+    _insert_events(conn, user_id, (2, 0))
+    record_feedback(conn, user_id, 4, "already_seen", NOW)
+
+    results = recommend(conn, "dana", RankParams(top_n=3), now=NOW)
+
+    expected = build_base_taste_vector([WatchEvent(2)], SMALL_LIBRARY, NOW)
+    assert decode_vector(_stored_taste(conn, "dana")[2]).tobytes() == expected.tobytes()
+    assert {r.movie_id for r in results} == {1, 3, 5}
+
+
+def test_watch_tonight_feedback_neither_excludes_nor_changes_taste():
+    conn, user_id = _small_library_db()
+    _insert_events(conn, user_id, (2, 0))
+    record_feedback(conn, user_id, 4, "watch_tonight", NOW)
+
+    results = recommend(conn, "dana", RankParams(top_n=4), now=NOW)
+
+    expected = build_base_taste_vector([WatchEvent(2)], SMALL_LIBRARY, NOW)
+    assert decode_vector(_stored_taste(conn, "dana")[2]).tobytes() == expected.tobytes()
+    assert {r.movie_id for r in results} == {1, 3, 4, 5}
+
+
+def test_feedback_alone_is_still_cold_start():
+    conn, user_id = _small_library_db()
+    record_feedback(conn, user_id, 4, "not_interested", NOW)
+
+    with pytest.raises(NoWatchHistory):
+        recommend(conn, "dana", RankParams(top_n=3), now=NOW)
+
+
+def test_connect_adds_the_feedback_table_to_an_existing_database(tmp_path):
+    path = tmp_path / "legacy.db"
+    legacy = sqlite3.connect(path)
+    legacy.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE)")
+    legacy.close()
+
+    conn = connect(path)
+
+    assert conn.execute("SELECT COUNT(*) FROM feedback_events").fetchone() == (0,)
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO feedback_events (user_id, movie_id, action, created_at)"
+            " VALUES (1, 1, 'love', '')"
+        )
