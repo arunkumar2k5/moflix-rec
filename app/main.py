@@ -1,7 +1,8 @@
 """Web service: `uvicorn app.main:app --log-config app/log_config.json`.
 
-Reads the database path from MOLLIB_DB and the number of picks GET /recommendations
-returns from MOFLIX_TOP_N (default 3).
+Reads the database path from MOFLIX_DB, the number of picks GET /recommendations and POST /chat
+return from MOFLIX_TOP_N (default 3), and each user's daily chat message cap from
+MOFLIX_CHAT_DAILY_CAP (default 50). `app.llm` documents the LLM settings.
 
 There is deliberately no sign-up route; accounts come only from `python -m app.cli add-user`.
 """
@@ -9,14 +10,15 @@ There is deliberately no sign-up route; accounts come only from `python -m app.c
 import os
 import sqlite3
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
 
 from fastapi import Cookie, Depends, FastAPI, HTTPException, Request, Response, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from app import chat
 from app.auth import (
     SESSION_LIFETIME,
     LoginRateLimited,
@@ -30,9 +32,14 @@ from app.auth import (
     utc_now,
     verify_password,
 )
+from app.chat import ChatConfig, Mode, Session
 from app.db import connect, log_recommendations
+from app.intent import Intent
+from app.llm import IntentRequest
 from app.logs import RequestContext, logger
 from app.recommend import (
+    NO_CONSTRAINTS,
+    Library,
     LibraryCache,
     NoWatchHistory,
     RankParams,
@@ -40,6 +47,7 @@ from app.recommend import (
     recommend_for_user,
     watch_events,
 )
+from app.taste import WatchEvent
 
 SESSION_COOKIE = "session"
 
@@ -75,6 +83,18 @@ class Recommendations(BaseModel):
     cold_start: bool
 
 
+class ChatMessage(BaseModel):
+    message: str = Field(min_length=1, max_length=1000)
+
+
+class ChatReply(BaseModel):
+    reply: str
+    understood: Intent
+    items: list[RecommendedMovie]
+    mode: Mode
+    cold_start: bool  # as for Recommendations
+
+
 class ChangePassword(BaseModel):
     current_password: str
     new_password: str
@@ -106,9 +126,56 @@ def current_user(request: Request, conn: Db, token: SessionToken = None) -> User
     return user
 
 
-def create_app(db_path: str | Path, top_n: int = 3) -> FastAPI:
+def create_app(
+    db_path: str | Path, top_n: int = 3, chat_config: ChatConfig | None = None
+) -> FastAPI:
+    chat_config = chat_config or ChatConfig()
     rank_params = RankParams(top_n=top_n)
     library_cache = LibraryCache()
+
+    def current_library(conn: sqlite3.Connection) -> Library:
+        try:
+            return library_cache.get(conn)
+        except RecommendError as error:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(error)) from None
+
+    def picks(
+        conn: sqlite3.Connection,
+        user: User,
+        events: Sequence[WatchEvent],
+        library: Library,
+        session: Session | None,
+    ) -> list[RecommendedMovie]:
+        """The user's picks, tuned by their chat session if any, logged as shown.
+
+        Raises NoWatchHistory. As for `recommend_for_user`, read `events` before `library`.
+        """
+        recommended = recommend_for_user(
+            conn,
+            user.id,
+            events,
+            library,
+            rank_params,
+            constraints=NO_CONSTRAINTS if session is None else session.constraints,
+            tune=None if session is None else session.tune,
+        )
+        with conn:
+            log_recommendations(conn, user.id, [pick.movie_id for pick in recommended], utc_now())
+        items = []
+        for pick in recommended:
+            movie = library.by_id[pick.movie_id].movie
+            items.append(
+                RecommendedMovie(
+                    movie_id=movie.id,
+                    title=movie.title,
+                    year=movie.year,
+                    genres=list(movie.genres),
+                    runtime=movie.runtime,
+                    poster_url=movie.poster_url,
+                    reason=pick.reason,
+                )
+            )
+        return items
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -209,30 +276,57 @@ def create_app(db_path: str | Path, top_n: int = 3) -> FastAPI:
     @app.get("/recommendations")
     def recommendations(conn: Db, user: Annotated[User, Depends(current_user)]) -> Recommendations:
         events = watch_events(conn, user.id)
+        session = chat.active_session(conn, user.id)
         try:
-            library = library_cache.get(conn)
-            picks = recommend_for_user(conn, user.id, events, library, rank_params)
+            items = picks(conn, user, events, current_library(conn), session)
         except NoWatchHistory:
             return Recommendations(items=[], cold_start=True)
-        except RecommendError as error:
-            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(error)) from None
-        with conn:
-            log_recommendations(conn, user.id, [pick.movie_id for pick in picks], utc_now())
-        items = []
-        for pick in picks:
-            movie = library.by_id[pick.movie_id].movie
-            items.append(
-                RecommendedMovie(
-                    movie_id=movie.id,
-                    title=movie.title,
-                    year=movie.year,
-                    genres=list(movie.genres),
-                    runtime=movie.runtime,
-                    poster_url=movie.poster_url,
-                    reason=pick.reason,
-                )
-            )
         return Recommendations(items=items, cold_start=False)
+
+    @app.post("/chat")
+    def post_chat(
+        body: ChatMessage, conn: Db, user: Annotated[User, Depends(current_user)]
+    ) -> ChatReply:
+        now = utc_now()
+        try:
+            # Checked before the provider call too, so a refused message costs nothing.
+            chat.check_daily_cap(conn, user.id, now, chat_config.daily_cap)
+            events = watch_events(conn, user.id)
+            loaded = current_library(conn)
+            session = chat.active_session(conn, user.id) or Session()
+            request = IntentRequest(
+                message=body.message,
+                turns=chat.recent_turns(conn, session),
+                picks=chat.shown_picks(conn, user.id, loaded),
+            )
+            intent, mode = chat.parse_intent(
+                chat_config, conn, request, user.id, now, db_path=app.state.db_path
+            )
+            reply = chat.describe(intent, mode)
+            session = chat.commit_turn(
+                conn,
+                user.id,
+                intent,
+                loaded,
+                body.message,
+                reply,
+                now=now,
+                daily_cap=chat_config.daily_cap,
+            )
+        except chat.DailyCapReached:
+            raise HTTPException(
+                status.HTTP_429_TOO_MANY_REQUESTS, "daily chat limit reached"
+            ) from None
+        try:
+            items = picks(conn, user, events, loaded, session)
+        except NoWatchHistory:
+            return ChatReply(reply=reply, understood=intent, items=[], mode=mode, cold_start=True)
+        return ChatReply(reply=reply, understood=intent, items=items, mode=mode, cold_start=False)
+
+    @app.post("/chat/reset", status_code=status.HTTP_204_NO_CONTENT)
+    def reset_chat(conn: Db, user: Annotated[User, Depends(current_user)]) -> None:
+        with conn:
+            chat.end_session(conn, user.id, utc_now())
 
     @app.get("/api/users")
     def list_users(conn: Db) -> list[UserInfo]:
@@ -242,4 +336,8 @@ def create_app(db_path: str | Path, top_n: int = 3) -> FastAPI:
     return app
 
 
-app = create_app(os.environ.get("MOFLIX_DB", "moflix.db"), int(os.environ.get("MOFLIX_TOP_N", "3")))
+app = create_app(
+    os.environ.get("MOFLIX_DB", "moflix.db"),
+    int(os.environ.get("MOFLIX_TOP_N", "3")),
+    ChatConfig.from_env(),
+)
