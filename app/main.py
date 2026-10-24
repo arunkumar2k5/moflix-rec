@@ -4,6 +4,7 @@ picks GET /recommendations returns from MOFLIX_TOP_N (default 3).
 There is deliberately no sign-up route; accounts come only from `python -m app.cli add-user`.
 """
 
+import logging
 import os
 import sqlite3
 from collections.abc import AsyncIterator, Iterator
@@ -34,9 +35,12 @@ from app.recommend import (
     RankParams,
     RecommendError,
     recommend_for_user,
+    watch_events,
 )
 
 SESSION_COOKIE = "session"
+
+logger = logging.getLogger(__name__)
 
 
 class Credentials(BaseModel):
@@ -105,8 +109,9 @@ def create_app(db_path: str | Path, top_n: int = 3) -> FastAPI:
         conn = connect(db_path)
         try:
             library_cache.get(conn)
-        except RecommendError:
-            pass  # GET /recommendations reports it
+        except Exception:
+            # Every other route works without the library; GET /recommendations retries the load.
+            logger.exception("could not load the movie library at startup")
         finally:
             conn.close()
         yield
@@ -167,9 +172,10 @@ def create_app(db_path: str | Path, top_n: int = 3) -> FastAPI:
 
     @app.get("/recommendations")
     def recommendations(conn: Db, user: Annotated[User, Depends(current_user)]) -> Recommendations:
+        events = watch_events(conn, user.id)
         try:
             library = library_cache.get(conn)
-            picks = recommend_for_user(conn, user.id, library, rank_params)
+            picks = recommend_for_user(conn, user.id, events, library, rank_params)
         except NoWatchHistory:
             return Recommendations(items=[], cold_start=True)
         except RecommendError as error:

@@ -8,7 +8,14 @@ from fastapi.testclient import TestClient
 from app.auth import set_password
 from app.db import connect, insert_movie, store_vector
 from app.main import create_app
-from app.recommend import RankParams, load_library, recommend, recommend_for_user
+from app.recommend import (
+    LibraryCache,
+    RankParams,
+    load_library,
+    recommend,
+    recommend_for_user,
+    watch_events,
+)
 from app.vectors import FULL_DIMENSION, GENRES, VECTOR_VERSION, Movie
 
 PASSWORD = "correct horse battery staple"
@@ -111,10 +118,8 @@ def test_user_without_history_gets_an_empty_cold_start_response(db_path):
     assert _log(db_path) == []
 
 
-def test_movies_synced_while_running_are_picked_up(db_path, library):
-    client = _logged_in(db_path, "alice", top_n=len(library["movies"]))
-    before = {item["movie_id"] for item in client.get("/recommendations").json()["items"]}
-
+def _sync_movie_alice_watched(db_path, library):
+    """Commit what an Emby sync does for a new movie alice watched; returns its id."""
     conn = connect(db_path)
     new_id = max(movie["id"] for movie in library["movies"]) + 1
     template = Movie(**library["movies"][0])
@@ -126,13 +131,69 @@ def test_movies_synced_while_running_are_picked_up(db_path, library):
             "INSERT INTO watch_events (user_id, movie_id) VALUES (?, ?)", (alice_id, new_id)
         )
     conn.close()
+    return new_id
 
+
+def test_movies_synced_while_running_are_picked_up(db_path, library):
+    client = _logged_in(db_path, "alice", top_n=len(library["movies"]))
+    before = {item["movie_id"] for item in client.get("/recommendations").json()["items"]}
+
+    new_id = _sync_movie_alice_watched(db_path, library)
     response = client.get("/recommendations")
 
     assert response.status_code == 200
     after = {item["movie_id"] for item in response.json()["items"]}
     assert new_id not in after
     assert after <= before
+
+
+def test_a_sync_committing_after_the_library_is_taken_is_ignored(db_path, library, monkeypatch):
+    client = _logged_in(db_path, "alice")
+    get = LibraryCache.get
+    synced = []
+
+    def get_then_sync(cache, conn):
+        taken = get(cache, conn)
+        if not synced:
+            synced.append(_sync_movie_alice_watched(db_path, library))
+        return taken
+
+    monkeypatch.setattr(LibraryCache, "get", get_then_sync)
+    response = client.get("/recommendations")
+
+    assert response.status_code == 200
+    assert synced[0] not in {item["movie_id"] for item in response.json()["items"]}
+
+
+def test_vectors_rebuilt_while_running_are_reported_as_unavailable(db_path):
+    client = _logged_in(db_path, "alice")
+    assert client.get("/recommendations").status_code == 200
+
+    conn = connect(db_path)
+    with conn:
+        conn.execute("UPDATE movie_vectors SET vector_version = vector_version - 1")
+    conn.close()
+    response = client.get("/recommendations")
+
+    assert response.status_code == 503
+    assert "rebuild" in response.json()["detail"]
+
+
+def test_a_failed_startup_load_leaves_the_app_up_and_is_retried(db_path, monkeypatch):
+    calls = []
+
+    def fail_first(conn):
+        calls.append(conn)
+        if len(calls) == 1:
+            raise KeyError("vector without a movie")
+        return load_library(conn)
+
+    monkeypatch.setattr("app.recommend.load_library", fail_first)
+    with _client(db_path) as client:
+        assert len(calls) == 1
+        login = client.post("/auth/login", json={"username": "alice", "password": PASSWORD})
+        assert login.status_code == 200
+        assert client.get("/recommendations").status_code == 200
 
 
 def test_stale_vectors_are_reported_as_unavailable(db_path):
@@ -168,9 +229,10 @@ def test_scoring_a_20000_movie_library_is_fast(tmp_path):
             [(user_id, movie_id) for movie_id in range(1, 21)],
         )
 
+    events = watch_events(conn, user_id)
     library = load_library(conn)
     start = time.perf_counter()
-    recommend_for_user(conn, user_id, library, RankParams(top_n=3))
+    recommend_for_user(conn, user_id, events, library, RankParams(top_n=3))
     scoring = time.perf_counter() - start
     conn.close()
 

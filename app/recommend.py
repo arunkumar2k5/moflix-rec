@@ -244,7 +244,7 @@ def _user_id(conn: sqlite3.Connection, user_name: str) -> int:
     return row[0]
 
 
-def _watch_events(conn: sqlite3.Connection, user_id: int) -> list[WatchEvent]:
+def watch_events(conn: sqlite3.Connection, user_id: int) -> list[WatchEvent]:
     rows = conn.execute(
         "SELECT movie_id, completion, play_count, favourite, not_interested, watched_at"
         " FROM watch_events WHERE user_id = ? ORDER BY movie_id, id",
@@ -307,14 +307,18 @@ class LibraryCache:
 def recommend_for_user(
     conn: sqlite3.Connection,
     user_id: int,
+    events: Sequence[WatchEvent],
     library: Library,
     params: RankParams = DEFAULT_RANK_PARAMS,
     constraints: Constraints = NO_CONSTRAINTS,
     now: datetime | None = None,
 ) -> list[Recommendation]:
-    """Rank the user's unseen movies, recording the taste vector built at `now`."""
+    """Rank the user's unseen movies, recording the taste vector built at `now`.
+
+    Read `events` before taking `library`: a sync commits a movie's vector together with any
+    event for it, so only that order guarantees every watched movie is in the library.
+    """
     now = now or datetime.now(timezone.utc)
-    events = _watch_events(conn, user_id)
     if not events:
         raise NoWatchHistory("no watch history to build a taste vector from")
     candidates = library.by_id
@@ -342,7 +346,10 @@ def recommend(
 ) -> list[Recommendation]:
     """`recommend_for_user` by name, loading the library from scratch."""
     user_id = _user_id(conn, user_name)
+    events = watch_events(conn, user_id)
     try:
-        return recommend_for_user(conn, user_id, load_library(conn), params, constraints, now)
+        return recommend_for_user(
+            conn, user_id, events, load_library(conn), params, constraints, now
+        )
     except NoWatchHistory as error:
         raise NoWatchHistory(f"user {user_name} has {error}") from None

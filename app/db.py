@@ -69,7 +69,6 @@ CREATE TABLE IF NOT EXISTS recommendation_log (
     movie_id INTEGER NOT NULL REFERENCES movies(id),
     shown_at TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS recommendation_log_user ON recommendation_log(user_id, shown_at);
 """
 
 # Taste signals on watch_events, added in place so databases created before them keep their

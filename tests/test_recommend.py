@@ -21,9 +21,9 @@ from app.recommend import (
     RankParams,
     RecommendError,
     UserContext,
-    _watch_events,
     rank,
     recommend,
+    watch_events,
 )
 from app.taste import WatchEvent, build_base_taste_vector
 from app.vectors import FULL_DIMENSION, GENRES, LAYOUT, VECTOR_VERSION, Movie
@@ -521,4 +521,4 @@ def test_watch_signal_columns_and_their_defaults_match_watch_event():
     conn, user_id = _small_library_db()
     conn.execute("INSERT INTO watch_events (user_id, movie_id) VALUES (?, 1)", (user_id,))
 
-    assert _watch_events(conn, user_id) == [WatchEvent(movie_id=1)]
+    assert watch_events(conn, user_id) == [WatchEvent(movie_id=1)]
