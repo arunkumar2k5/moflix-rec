@@ -1,13 +1,15 @@
-"""Web service: `uvicorn app.main:app`. Reads the database path from MOFLIX_DB and the number of
-picks GET /recommendations returns from MOFLIX_TOP_N (default 3).
+"""Web service: `uvicorn app.main:app --log-config app/log_config.json`.
+
+Reads the database path from MOLLIB_DB and the number of picks GET /recommendations
+returns from MOFLIX_TOP_N (default 3).
 
 There is deliberately no sign-up route; accounts come only from `python -m app.cli add-user`.
 """
 
-import logging
 import os
 import sqlite3
-from collections.abc import AsyncIterator, Iterator
+import time
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
@@ -29,6 +31,7 @@ from app.auth import (
     verify_password,
 )
 from app.db import connect, log_recommendations
+from app.logs import logger
 from app.recommend import (
     LibraryCache,
     NoWatchHistory,
@@ -39,8 +42,6 @@ from app.recommend import (
 )
 
 SESSION_COOKIE = "session"
-
-logger = logging.getLogger(__name__)
 
 
 class Credentials(BaseModel):
@@ -79,6 +80,11 @@ class ChangePassword(BaseModel):
     new_password: str
 
 
+class Health(BaseModel):
+    status: str
+    db: str
+
+
 def get_db(request: Request) -> Iterator[sqlite3.Connection]:
     # FastAPI may run the dependency and the endpoint on different threadpool threads.
     conn = connect(request.app.state.db_path, check_same_thread=False)
@@ -92,10 +98,11 @@ Db = Annotated[sqlite3.Connection, Depends(get_db)]
 SessionToken = Annotated[str | None, Cookie(alias=SESSION_COOKIE)]
 
 
-def current_user(conn: Db, token: SessionToken = None) -> User:
+def current_user(request: Request, conn: Db, token: SessionToken = None) -> User:
     user = session_user(conn, token, utc_now()) if token else None
     if user is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "not logged in")
+    request.state.user_id = user.id
     return user
 
 
@@ -119,8 +126,36 @@ def create_app(db_path: str | Path, top_n: int = 3) -> FastAPI:
     app = FastAPI(title="moflix-rec", lifespan=lifespan)
     app.state.db_path = db_path
 
+    @app.middleware("http")
+    async def log_request(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        started = time.perf_counter()
+        response = await call_next(request)
+        logger.info(
+            "request",
+            extra={
+                "method": request.method,
+                "path": request.url.path,
+                "status": response.status_code,
+                "duration_ms": round((time.perf_counter() - started) * 1000, 1),
+                "user_id": getattr(request.state, "user_id", None),
+            },
+        )
+        return response
+
+    @app.get("/health")
+    def health(response: Response) -> Health:
+        try:
+            connect(app.state.db_path).close()
+        except sqlite3.Error:
+            logger.exception("health_db_unavailable")
+            response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+            return Health(status="error", db="error")
+        return Health(status="ok", db="ok")
+
     @app.post("/auth/login")
-    def login(credentials: Credentials, conn: Db, response: Response) -> LoggedIn:
+    def login(credentials: Credentials, conn: Db, request: Request, response: Response) -> LoggedIn:
         now = utc_now()
         try:
             user = authenticate(conn, credentials.username, credentials.password, now)
@@ -130,6 +165,7 @@ def create_app(db_path: str | Path, top_n: int = 3) -> FastAPI:
             ) from None
         if user is None:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid username or password")
+        request.state.user_id = user.id
         session = create_session(conn, user, now)
         response.set_cookie(
             SESSION_COOKIE,
