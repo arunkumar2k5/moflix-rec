@@ -9,6 +9,7 @@ from app.auth import set_password
 from app.db import connect, insert_movie, store_vector
 from app.main import create_app
 from app.recommend import (
+    DEFAULT_COLD_START_MIN,
     LibraryCache,
     RankParams,
     load_library,
@@ -21,13 +22,13 @@ from app.vectors import FULL_DIMENSION, GENRES, VECTOR_VERSION, Movie
 PASSWORD = "correct horse battery staple"
 
 
-def _client(db_path, top_n=3):
+def _client(db_path, top_n=3, cold_start_min=DEFAULT_COLD_START_MIN):
     # The session cookie is Secure, so the client only sends it back over https.
-    return TestClient(create_app(db_path, top_n), base_url="https://testserver")
+    return TestClient(create_app(db_path, top_n, cold_start_min), base_url="https://testserver")
 
 
-def _logged_in(db_path, name, top_n=3):
-    client = _client(db_path, top_n)
+def _logged_in(db_path, name, top_n=3, cold_start_min=DEFAULT_COLD_START_MIN):
+    client = _client(db_path, top_n, cold_start_min)
     response = client.post("/auth/login", json={"username": name, "password": PASSWORD})
     assert response.status_code == 200
     return client
@@ -165,6 +166,16 @@ def test_user_with_exactly_cold_start_min_movies_is_not_cold_start(db_path, libr
 
     assert body["cold_start"] is False
     assert body["onboarding_prompt"] is None
+
+
+@pytest.mark.parametrize(("cold_start_min", "cold_start"), [(2, False), (6, True)])
+def test_cold_start_min_sets_the_threshold(db_path, cold_start_min, cold_start):
+    client = _logged_in(db_path, "bob", cold_start_min=cold_start_min)
+
+    body = client.get("/recommendations").json()
+
+    assert body["cold_start"] is cold_start
+    assert (body["onboarding_prompt"] is not None) is cold_start
 
 
 def test_sparse_history_excludes_watched_movies_and_stores_a_taste_vector(db_path):

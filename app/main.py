@@ -265,5 +265,5 @@ def create_app(
 app = create_app(
     os.environ.get("MOFLIX_DB", "moflix.db"),
     int(os.environ.get("MOFLIX_TOP_N", "3")),
-    int(os.environ.get("MOFLIX_COLD_START_MIN", "5")),
+    int(os.environ.get("MOFLIX_COLD_START_MIN", DEFAULT_COLD_START_MIN)),
 )
