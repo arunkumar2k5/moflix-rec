@@ -1,18 +1,21 @@
-"""SQLite storage for users, sessions, movies, vectors, watch history, taste vectors and picks."""
+"""SQLite storage for users, sessions, movies, vectors, watch history, taste vectors, picks and
+feedback on them."""
 
 import json
 import sqlite3
 from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
-from typing import get_args
+from typing import Literal, get_args
 
 import numpy as np
 
 from app.auth import Role
 from app.vectors import Movie
 
-SCHEMA = """
+FeedbackAction = Literal["watch_tonight", "not_interested", "already_seen"]
+
+SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL UNIQUE
@@ -69,6 +72,15 @@ CREATE TABLE IF NOT EXISTS recommendation_log (
     movie_id INTEGER NOT NULL REFERENCES movies(id),
     shown_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS feedback_events (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    movie_id INTEGER NOT NULL REFERENCES movies(id),
+    action TEXT NOT NULL
+        CHECK (action IN ({", ".join(repr(action) for action in get_args(FeedbackAction))})),
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS feedback_events_user ON feedback_events(user_id);
 """
 
 # Taste signals on watch_events, added in place so databases created before them keep their
@@ -171,15 +183,47 @@ def log_recommendations(
     )
 
 
+def record_feedback(
+    conn: sqlite3.Connection, user_id: int, movie_id: int, action: FeedbackAction, at: datetime
+) -> None:
+    conn.execute(
+        "INSERT INTO feedback_events (user_id, movie_id, action, created_at) VALUES (?, ?, ?, ?)",
+        (user_id, movie_id, action, at.isoformat()),
+    )
+
+
 def decode_vector(blob: bytes) -> np.ndarray:
     return np.frombuffer(blob, dtype=VECTOR_DTYPE)
 
 
+MOVIE_COLUMNS = (
+    "id, title, year, genres, runtime, language, country, certification, rating,"
+    ' director, "cast", overview, keywords, poster_url'
+)
+
+
 def load_movies(conn: sqlite3.Connection) -> list[Movie]:
-    cursor = conn.execute(
-        "SELECT id, title, year, genres, runtime, language, country, certification, rating,"
-        ' director, "cast", overview, keywords, poster_url FROM movies ORDER BY id'
+    return _decode_movies(conn.execute(f"SELECT {MOVIE_COLUMNS} FROM movies ORDER BY id"))
+
+
+def watch_tonight_movies(conn: sqlite3.Connection, user_id: int) -> list[Movie]:
+    """Movies the user saved for tonight, newest first, minus any they have since dismissed."""
+    return _decode_movies(
+        conn.execute(
+            f"SELECT {MOVIE_COLUMNS} FROM movies JOIN ("
+            "  SELECT movie_id, MAX(id) AS saved FROM feedback_events"
+            "  WHERE user_id = ? AND action = 'watch_tonight' GROUP BY movie_id"
+            ") ON movie_id = id"
+            " WHERE id NOT IN ("
+            "  SELECT movie_id FROM feedback_events"
+            "  WHERE user_id = ? AND action IN ('not_interested', 'already_seen')"
+            ") ORDER BY saved DESC",
+            (user_id, user_id),
+        )
     )
+
+
+def _decode_movies(cursor: sqlite3.Cursor) -> list[Movie]:
     columns = [description[0] for description in cursor.description]
     movies = []
     for row in cursor:
