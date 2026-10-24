@@ -12,7 +12,7 @@ from typing import Literal, get_args
 
 import numpy as np
 
-from app.db import decode_vector, load_movies, store_taste_vector
+from app.db import decode_vector, dismissals, load_movies, store_taste_vector
 from app.taste import DEFAULT_PARAMS, WatchEvent, build_base_taste_vector, event_weight
 from app.vectors import FULL_DIMENSION, GENRES, LAYOUT, VECTOR_VERSION, Movie
 
@@ -45,9 +45,25 @@ class Candidate:
 @dataclass(frozen=True, eq=False)
 class UserContext:
     taste: np.ndarray
-    excluded_ids: frozenset[int]  # every movie the user has an event for, liked or not
+    excluded_ids: frozenset[int]  # every movie the user has an event or dismissal for
     liked: tuple[Candidate, ...]  # only this user's positively weighted movies, named in reasons
     passed: tuple[Candidate, ...] = ()  # this user's other movies, named only as passed on
+
+
+@dataclass(frozen=True)
+class Feedback:
+    """The user's verdicts on picks: never pick either kind again; not interested counts against
+    their taste as a negative event dated when they said so."""
+
+    not_interested: tuple[WatchEvent, ...] = ()
+    already_seen: frozenset[int] = frozenset()
+
+    @property
+    def dismissed_ids(self) -> frozenset[int]:
+        return self.already_seen | {event.movie_id for event in self.not_interested}
+
+
+NO_FEEDBACK = Feedback()
 
 
 @dataclass(frozen=True, eq=False)
@@ -264,6 +280,17 @@ def watch_events(conn: sqlite3.Connection, user_id: int) -> list[WatchEvent]:
     ]
 
 
+def user_feedback(conn: sqlite3.Connection, user_id: int) -> Feedback:
+    rows = dismissals(conn, user_id)
+    not_interested = tuple(
+        WatchEvent(movie_id, not_interested=True, watched_at=at)
+        for movie_id, action, at in rows
+        if action == "not_interested"
+    )
+    already_seen = frozenset(movie_id for movie_id, action, _ in rows if action == "already_seen")
+    return Feedback(not_interested, already_seen)
+
+
 def load_library(conn: sqlite3.Connection) -> Library:
     rows = conn.execute(
         "SELECT movie_id, vector_version, dimension, vector FROM movie_vectors ORDER BY movie_id"
@@ -313,16 +340,20 @@ def recommend_for_user(
     params: RankParams = DEFAULT_RANK_PARAMS,
     constraints: Constraints = NO_CONSTRAINTS,
     now: datetime | None = None,
+    feedback: Feedback = NO_FEEDBACK,
 ) -> list[Recommendation]:
-    """Rank the user's unseen movies, recording the taste vector built at `now`.
+    """Rank the movies the user has neither watched nor dismissed, recording the taste vector
+    built at `now`.
 
-    Read `events` before taking `library`: a sync commits a movie's vector together with any
-    event for it, so only that order guarantees every watched movie is in the library.
+    Read `events` and `feedback` before taking `library`: a sync commits a movie's vector
+    together with any event for it, so only that order guarantees every movie they name is in
+    the library.
     """
     now = now or datetime.now(timezone.utc)
-    if not events:
+    if not events and not feedback.not_interested:
         raise NoWatchHistory("no watch history to build a taste vector from")
-    return rank(_user_context(conn, user_id, events, library, now), library, constraints, params)
+    user_ctx = _user_context(conn, user_id, events, feedback, library, now)
+    return rank(user_ctx, library, constraints, params)
 
 
 def recommend_cold_start(
@@ -333,30 +364,33 @@ def recommend_cold_start(
     params: RankParams = DEFAULT_RANK_PARAMS,
     cold_start_min: int = DEFAULT_COLD_START_MIN,
     now: datetime | None = None,
+    feedback: Feedback = NO_FEEDBACK,
 ) -> list[Recommendation]:
-    """Popular unseen movies blended with whatever taste signal exists (FR-16).
+    """Popular unseen, undismissed movies blended with whatever taste signal exists (FR-16).
 
     For users with fewer than `cold_start_min` watched movies: the taste weight grows linearly
     with the number watched, from pure popularity at none. Popularity is the movie's own 0-10
     community rating and nothing else; the library has no vote count, and play counts are other
     users' histories. Picks keep popularity order, so there is no MMR here.
 
-    Read `events` before taking `library`, as for `recommend_for_user`.
+    Read `events` and `feedback` before taking `library`, as for `recommend_for_user`.
     """
     now = now or datetime.now(timezone.utc)
-    excluded = {e.movie_id for e in events}
-    rows = np.flatnonzero(~np.isin(library.ids, list(excluded)))
+    watched = {e.movie_id for e in events}
+    rows = np.flatnonzero(~np.isin(library.ids, list(watched | feedback.dismissed_ids)))
     if not len(rows):
         return []
     popularity = np.clip([c.movie.rating for c in library.candidates], 0.0, 10.0)[rows] / 10
-    user_ctx = _user_context(conn, user_id, events, library, now) if events else None
+    user_ctx = None
+    if events or feedback.not_interested:
+        user_ctx = _user_context(conn, user_id, events, feedback, library, now)
     relevance = np.zeros(len(rows))
     if user_ctx is not None:
         scores = _scores(user_ctx.taste, library, params.similarity)[rows]
         spread = scores.max() - scores.min()
         if spread > 0:
             relevance = (scores - scores.min()) / spread
-    taste_weight = len(excluded) / cold_start_min
+    taste_weight = len(watched) / cold_start_min
     popular_term = (1 - taste_weight) * popularity
     taste_term = taste_weight * relevance
     blended = popular_term + taste_term
@@ -383,22 +417,26 @@ def _user_context(
     conn: sqlite3.Connection,
     user_id: int,
     events: Sequence[WatchEvent],
+    feedback: Feedback,
     library: Library,
     now: datetime,
 ) -> UserContext:
-    """The user's taste built at `now` from their events, recording it as a side effect."""
+    """The user's taste built at `now` from their events and not-interested feedback, recording
+    it as a side effect."""
     candidates = library.by_id
-    watched_vectors = {e.movie_id: candidates[e.movie_id].vector for e in events}
-    taste = build_base_taste_vector(events, watched_vectors, now)
+    taste_events = [*events, *feedback.not_interested]
+    vectors = {e.movie_id: candidates[e.movie_id].vector for e in taste_events}
+    taste = build_base_taste_vector(taste_events, vectors, now)
     with conn:
         store_taste_vector(conn, user_id, VECTOR_VERSION, taste, now)
+    rejected_ids = {e.movie_id for e in feedback.not_interested}
     liked_ids = {e.movie_id for e in events if event_weight(e, now, DEFAULT_PARAMS) > 0}
-    excluded_ids = frozenset(event.movie_id for event in events)
+    liked_ids -= rejected_ids
     return UserContext(
         taste=taste,
-        excluded_ids=excluded_ids,
+        excluded_ids=frozenset(vectors) | feedback.dismissed_ids,
         liked=tuple(candidates[movie_id] for movie_id in sorted(liked_ids)),
-        passed=tuple(candidates[movie_id] for movie_id in sorted(excluded_ids - liked_ids)),
+        passed=tuple(candidates[movie_id] for movie_id in sorted(set(vectors) - liked_ids)),
     )
 
 
@@ -412,9 +450,10 @@ def recommend(
     """`recommend_for_user` by name, loading the library from scratch."""
     user_id = _user_id(conn, user_name)
     events = watch_events(conn, user_id)
+    feedback = user_feedback(conn, user_id)
     try:
         return recommend_for_user(
-            conn, user_id, events, load_library(conn), params, constraints, now
+            conn, user_id, events, load_library(conn), params, constraints, now, feedback
         )
     except NoWatchHistory as error:
         raise NoWatchHistory(f"user {user_name} has {error}") from None

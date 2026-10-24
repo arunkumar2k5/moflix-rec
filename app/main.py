@@ -31,7 +31,13 @@ from app.auth import (
     utc_now,
     verify_password,
 )
-from app.db import connect, log_recommendations
+from app.db import (
+    FeedbackAction,
+    connect,
+    log_recommendations,
+    record_feedback,
+    watch_tonight_movies,
+)
 from app.logs import RequestContext, logger
 from app.recommend import (
     DEFAULT_COLD_START_MIN,
@@ -40,8 +46,10 @@ from app.recommend import (
     RecommendError,
     recommend_cold_start,
     recommend_for_user,
+    user_feedback,
     watch_events,
 )
+from app.vectors import Movie
 
 SESSION_COOKIE = "session"
 ONBOARDING_PROMPT = (
@@ -65,13 +73,27 @@ class UserInfo(BaseModel):
     name: str
 
 
-class RecommendedMovie(BaseModel):
+class MovieCard(BaseModel):
     movie_id: int
     title: str
     year: int
     genres: list[str]
     runtime: int
     poster_url: str
+
+    @classmethod
+    def of(cls, movie: Movie) -> "MovieCard":
+        return cls(
+            movie_id=movie.id,
+            title=movie.title,
+            year=movie.year,
+            genres=list(movie.genres),
+            runtime=movie.runtime,
+            poster_url=movie.poster_url,
+        )
+
+
+class RecommendedMovie(MovieCard):
     reason: str
 
 
@@ -81,6 +103,11 @@ class Recommendations(BaseModel):
     # popularity and `onboarding_prompt` invites them to name genres.
     cold_start: bool
     onboarding_prompt: str | None = None
+
+
+class FeedbackRequest(BaseModel):
+    movie_id: int
+    action: FeedbackAction
 
 
 class ChangePassword(BaseModel):
@@ -221,38 +248,46 @@ def create_app(
     @app.get("/recommendations")
     def recommendations(conn: Db, user: Annotated[User, Depends(current_user)]) -> Recommendations:
         events = watch_events(conn, user.id)
+        feedback = user_feedback(conn, user.id)
         cold_start = len({e.movie_id for e in events}) < cold_start_min
         try:
             library = library_cache.get(conn)
             if cold_start:
                 picks = recommend_cold_start(
-                    conn, user.id, events, library, rank_params, cold_start_min
+                    conn, user.id, events, library, rank_params, cold_start_min, feedback=feedback
                 )
             else:
-                picks = recommend_for_user(conn, user.id, events, library, rank_params)
+                picks = recommend_for_user(
+                    conn, user.id, events, library, rank_params, feedback=feedback
+                )
         except RecommendError as error:
             raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(error)) from None
         with conn:
             log_recommendations(conn, user.id, [pick.movie_id for pick in picks], utc_now())
-        items = []
-        for pick in picks:
-            movie = library.by_id[pick.movie_id].movie
-            items.append(
+        return Recommendations(
+            items=[
                 RecommendedMovie(
-                    movie_id=movie.id,
-                    title=movie.title,
-                    year=movie.year,
-                    genres=list(movie.genres),
-                    runtime=movie.runtime,
-                    poster_url=movie.poster_url,
+                    **MovieCard.of(library.by_id[pick.movie_id].movie).model_dump(),
                     reason=pick.reason,
                 )
-            )
-        return Recommendations(
-            items=items,
+                for pick in picks
+            ],
             cold_start=cold_start,
             onboarding_prompt=ONBOARDING_PROMPT if cold_start else None,
         )
+
+    @app.post("/feedback", status_code=status.HTTP_204_NO_CONTENT)
+    def feedback(
+        body: FeedbackRequest, conn: Db, user: Annotated[User, Depends(current_user)]
+    ) -> None:
+        if conn.execute("SELECT 1 FROM movies WHERE id = ?", (body.movie_id,)).fetchone() is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown movie")
+        with conn:
+            record_feedback(conn, user.id, body.movie_id, body.action, utc_now())
+
+    @app.get("/feedback/watch-tonight")
+    def watch_tonight(conn: Db, user: Annotated[User, Depends(current_user)]) -> list[MovieCard]:
+        return [MovieCard.of(movie) for movie in watch_tonight_movies(conn, user.id)]
 
     @app.get("/api/users")
     def list_users(conn: Db) -> list[UserInfo]:
