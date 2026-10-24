@@ -3,11 +3,9 @@ from dataclasses import asdict
 
 import numpy as np
 import pytest
-from fastapi.testclient import TestClient
 
 from app.auth import set_password
 from app.db import connect, insert_movie, store_vector
-from app.main import create_app
 from app.recommend import (
     LibraryCache,
     RankParams,
@@ -17,28 +15,7 @@ from app.recommend import (
     watch_events,
 )
 from app.vectors import FULL_DIMENSION, GENRES, VECTOR_VERSION, Movie
-
-PASSWORD = "correct horse battery staple"
-
-
-def _client(db_path, top_n=3):
-    # The session cookie is Secure, so the client only sends it back over https.
-    return TestClient(create_app(db_path, top_n), base_url="https://testserver")
-
-
-def _logged_in(db_path, name, top_n=3):
-    client = _client(db_path, top_n)
-    response = client.post("/auth/login", json={"username": name, "password": PASSWORD})
-    assert response.status_code == 200
-    return client
-
-
-@pytest.fixture
-def db_path(seeded_db):
-    path, conn = seeded_db
-    for name in ("alice", "bob"):
-        set_password(conn, name, PASSWORD, "user")
-    return path
+from tests.conftest import PASSWORD, api_client, logged_in
 
 
 def _watched(library, name):
@@ -58,7 +35,7 @@ def _log(db_path):
 def test_logged_in_user_gets_explained_unwatched_picks(db_path, library):
     assert len(_watched(library, "alice")) >= 5
 
-    response = _logged_in(db_path, "alice").get("/recommendations")
+    response = logged_in(db_path, "alice").get("/recommendations")
 
     assert response.status_code == 200
     body = response.json()
@@ -76,7 +53,7 @@ def test_logged_in_user_gets_explained_unwatched_picks(db_path, library):
 
 
 def test_recommendations_require_a_session(db_path):
-    with _client(db_path) as client:
+    with api_client(db_path) as client:
         assert client.get("/recommendations").status_code == 401
     assert _log(db_path) == []
 
@@ -87,7 +64,7 @@ def test_each_user_gets_the_cli_picks_from_their_own_history(db_path, library, t
     conn = connect(db_path)
 
     for name in ("alice", "bob"):
-        items = _logged_in(db_path, name, top_n).get("/recommendations").json()["items"]
+        items = logged_in(db_path, name, top_n).get("/recommendations").json()["items"]
         expected = recommend(conn, name, RankParams(top_n=top_n))
 
         assert [(i["movie_id"], i["title"], i["year"], i["reason"]) for i in items] == [
@@ -97,7 +74,7 @@ def test_each_user_gets_the_cli_picks_from_their_own_history(db_path, library, t
 
 
 def test_each_call_logs_every_shown_pick_for_the_session_user_only(db_path):
-    client = _logged_in(db_path, "bob")
+    client = logged_in(db_path, "bob")
 
     first = [item["movie_id"] for item in client.get("/recommendations").json()["items"]]
     second = [item["movie_id"] for item in client.get("/recommendations").json()["items"]]
@@ -111,7 +88,7 @@ def test_user_without_history_gets_an_empty_cold_start_response(db_path):
     set_password(conn, "carol", PASSWORD, "user")
     conn.close()
 
-    response = _logged_in(db_path, "carol").get("/recommendations")
+    response = logged_in(db_path, "carol").get("/recommendations")
 
     assert response.status_code == 200
     assert response.json() == {"items": [], "cold_start": True}
@@ -135,7 +112,7 @@ def _sync_movie_alice_watched(db_path, library):
 
 
 def test_movies_synced_while_running_are_picked_up(db_path, library):
-    client = _logged_in(db_path, "alice", top_n=len(library["movies"]))
+    client = logged_in(db_path, "alice", top_n=len(library["movies"]))
     before = {item["movie_id"] for item in client.get("/recommendations").json()["items"]}
 
     new_id = _sync_movie_alice_watched(db_path, library)
@@ -148,7 +125,7 @@ def test_movies_synced_while_running_are_picked_up(db_path, library):
 
 
 def test_a_sync_committing_after_the_library_is_taken_is_ignored(db_path, library, monkeypatch):
-    client = _logged_in(db_path, "alice")
+    client = logged_in(db_path, "alice")
     get = LibraryCache.get
     synced = []
 
@@ -166,7 +143,7 @@ def test_a_sync_committing_after_the_library_is_taken_is_ignored(db_path, librar
 
 
 def test_vectors_rebuilt_while_running_are_reported_as_unavailable(db_path):
-    client = _logged_in(db_path, "alice")
+    client = logged_in(db_path, "alice")
     assert client.get("/recommendations").status_code == 200
 
     conn = connect(db_path)
@@ -189,7 +166,7 @@ def test_a_failed_startup_load_leaves_the_app_up_and_is_retried(db_path, monkeyp
         return load_library(conn)
 
     monkeypatch.setattr("app.recommend.load_library", fail_first)
-    with _client(db_path) as client:
+    with api_client(db_path) as client:
         assert len(calls) == 1
         login = client.post("/auth/login", json={"username": "alice", "password": PASSWORD})
         assert login.status_code == 200
@@ -202,7 +179,7 @@ def test_stale_vectors_are_reported_as_unavailable(db_path):
         conn.execute("UPDATE movie_vectors SET vector_version = vector_version - 1")
     conn.close()
 
-    response = _logged_in(db_path, "alice").get("/recommendations")
+    response = logged_in(db_path, "alice").get("/recommendations")
 
     assert response.status_code == 503
     assert "rebuild" in response.json()["detail"]
@@ -236,7 +213,7 @@ def test_scoring_a_20000_movie_library_is_fast(tmp_path):
     scoring = time.perf_counter() - start
     conn.close()
 
-    with _client(path) as client:  # startup loads the library
+    with api_client(path) as client:  # startup loads the library
         client.post("/auth/login", json={"username": "erin", "password": PASSWORD})
         start = time.perf_counter()
         response = client.get("/recommendations")

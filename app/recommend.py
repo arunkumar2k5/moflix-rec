@@ -12,7 +12,7 @@ from typing import Literal, get_args
 
 import numpy as np
 
-from app.db import decode_vector, load_movies, store_taste_vector
+from app.db import Feedback, current_feedback, decode_vector, load_movies, store_taste_vector
 from app.taste import DEFAULT_PARAMS, WatchEvent, build_base_taste_vector, event_weight
 from app.vectors import FULL_DIMENSION, GENRES, LAYOUT, VECTOR_VERSION, Movie
 
@@ -45,7 +45,9 @@ class Candidate:
 @dataclass(frozen=True, eq=False)
 class UserContext:
     taste: np.ndarray
-    excluded_ids: frozenset[int]  # every movie the user has an event for, liked or not
+    # every movie the user has an event for, liked or not, or currently marks not interested
+    # or already seen
+    excluded_ids: frozenset[int]
     liked: tuple[Candidate, ...]  # only this user's positively weighted movies, named in reasons
     passed: tuple[Candidate, ...] = ()  # this user's other movies, named only as passed on
 
@@ -312,27 +314,40 @@ def recommend_for_user(
     params: RankParams = DEFAULT_RANK_PARAMS,
     constraints: Constraints = NO_CONSTRAINTS,
     now: datetime | None = None,
+    feedback: Sequence[Feedback] = (),
 ) -> list[Recommendation]:
     """Rank the user's unseen movies, recording the taste vector built at `now`.
 
-    Read `events` before taking `library`: a sync commits a movie's vector together with any
-    event for it, so only that order guarantees every watched movie is in the library.
+    `feedback` is the user's current action per movie: not-interested movies count as negative
+    events in the taste vector, and they and already-seen movies are excluded. Only watch
+    events end cold start.
+
+    Read `events` and `feedback` before taking `library`: a sync commits a movie's vector
+    together with any event for it, and feedback names only stored movies, so only that order
+    guarantees every movie they name is in the library.
     """
     now = now or datetime.now(timezone.utc)
     if not events:
         raise NoWatchHistory("no watch history to build a taste vector from")
+    rejected = [
+        WatchEvent(f.movie_id, not_interested=True, watched_at=f.created_at)
+        for f in feedback
+        if f.action == "not_interested"
+    ]
+    taste_events = [*events, *rejected]
     candidates = library.by_id
-    watched_vectors = {e.movie_id: candidates[e.movie_id].vector for e in events}
-    taste = build_base_taste_vector(events, watched_vectors, now)
+    watched_vectors = {e.movie_id: candidates[e.movie_id].vector for e in taste_events}
+    taste = build_base_taste_vector(taste_events, watched_vectors, now)
     with conn:
         store_taste_vector(conn, user_id, VECTOR_VERSION, taste, now)
-    liked_ids = {e.movie_id for e in events if event_weight(e, now, DEFAULT_PARAMS) > 0}
-    excluded_ids = frozenset(event.movie_id for event in events)
+    liked_ids = {e.movie_id for e in taste_events if event_weight(e, now, DEFAULT_PARAMS) > 0}
+    taste_ids = {e.movie_id for e in taste_events}
+    seen_ids = {f.movie_id for f in feedback if f.action == "already_seen"}
     user_ctx = UserContext(
         taste=taste,
-        excluded_ids=excluded_ids,
+        excluded_ids=frozenset(taste_ids | seen_ids),
         liked=tuple(candidates[movie_id] for movie_id in sorted(liked_ids)),
-        passed=tuple(candidates[movie_id] for movie_id in sorted(excluded_ids - liked_ids)),
+        passed=tuple(candidates[movie_id] for movie_id in sorted(taste_ids - liked_ids)),
     )
     return rank(user_ctx, library, constraints, params)
 
@@ -347,9 +362,10 @@ def recommend(
     """`recommend_for_user` by name, loading the library from scratch."""
     user_id = _user_id(conn, user_name)
     events = watch_events(conn, user_id)
+    feedback = current_feedback(conn, user_id)
     try:
         return recommend_for_user(
-            conn, user_id, events, load_library(conn), params, constraints, now
+            conn, user_id, events, load_library(conn), params, constraints, now, feedback
         )
     except NoWatchHistory as error:
         raise NoWatchHistory(f"user {user_name} has {error}") from None

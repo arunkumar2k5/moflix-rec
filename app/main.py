@@ -1,6 +1,6 @@
 """Web service: `uvicorn app.main:app --log-config app/log_config.json`.
 
-Reads the database path from MOLLIB_DB and the number of picks GET /recommendations
+Reads the database path from MOFLIX_DB and the number of picks GET /recommendations
 returns from MOFLIX_TOP_N (default 3).
 
 There is deliberately no sign-up route; accounts come only from `python -m app.cli add-user`.
@@ -30,7 +30,14 @@ from app.auth import (
     utc_now,
     verify_password,
 )
-from app.db import connect, log_recommendations
+from app.db import (
+    FeedbackAction,
+    connect,
+    current_feedback,
+    load_movies,
+    log_recommendations,
+    record_feedback,
+)
 from app.logs import RequestContext, logger
 from app.recommend import (
     LibraryCache,
@@ -40,6 +47,7 @@ from app.recommend import (
     recommend_for_user,
     watch_events,
 )
+from app.vectors import Movie
 
 SESSION_COOKIE = "session"
 
@@ -59,13 +67,32 @@ class UserInfo(BaseModel):
     name: str
 
 
-class RecommendedMovie(BaseModel):
+class FeedbackRequest(BaseModel):
+    movie_id: int
+    action: FeedbackAction
+
+
+class FeedbackMovie(BaseModel):
     movie_id: int
     title: str
     year: int
     genres: list[str]
     runtime: int
     poster_url: str
+
+    @classmethod
+    def of(cls, movie: Movie) -> "FeedbackMovie":
+        return cls(
+            movie_id=movie.id,
+            title=movie.title,
+            year=movie.year,
+            genres=list(movie.genres),
+            runtime=movie.runtime,
+            poster_url=movie.poster_url,
+        )
+
+
+class RecommendedMovie(FeedbackMovie):
     reason: str
 
 
@@ -209,30 +236,48 @@ def create_app(db_path: str | Path, top_n: int = 3) -> FastAPI:
     @app.get("/recommendations")
     def recommendations(conn: Db, user: Annotated[User, Depends(current_user)]) -> Recommendations:
         events = watch_events(conn, user.id)
+        feedback = current_feedback(conn, user.id)
         try:
             library = library_cache.get(conn)
-            picks = recommend_for_user(conn, user.id, events, library, rank_params)
+            picks = recommend_for_user(
+                conn, user.id, events, library, rank_params, feedback=feedback
+            )
         except NoWatchHistory:
             return Recommendations(items=[], cold_start=True)
         except RecommendError as error:
             raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(error)) from None
         with conn:
             log_recommendations(conn, user.id, [pick.movie_id for pick in picks], utc_now())
-        items = []
-        for pick in picks:
-            movie = library.by_id[pick.movie_id].movie
-            items.append(
-                RecommendedMovie(
-                    movie_id=movie.id,
-                    title=movie.title,
-                    year=movie.year,
-                    genres=list(movie.genres),
-                    runtime=movie.runtime,
-                    poster_url=movie.poster_url,
-                    reason=pick.reason,
-                )
+        items = [
+            RecommendedMovie(
+                **FeedbackMovie.of(library.by_id[pick.movie_id].movie).model_dump(),
+                reason=pick.reason,
             )
+            for pick in picks
+        ]
         return Recommendations(items=items, cold_start=False)
+
+    @app.post("/feedback", status_code=status.HTTP_204_NO_CONTENT)
+    def give_feedback(
+        body: FeedbackRequest, conn: Db, user: Annotated[User, Depends(current_user)]
+    ) -> None:
+        if conn.execute("SELECT 1 FROM movies WHERE id = ?", (body.movie_id,)).fetchone() is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown movie")
+        with conn:
+            record_feedback(conn, user.id, body.movie_id, body.action, utc_now())
+
+    @app.get("/feedback/watch-tonight")
+    def watch_tonight(
+        conn: Db, user: Annotated[User, Depends(current_user)]
+    ) -> list[FeedbackMovie]:
+        """The user's Watch tonight movies, most recently marked first."""
+        ids = [
+            f.movie_id
+            for f in reversed(current_feedback(conn, user.id))
+            if f.action == "watch_tonight"
+        ]
+        movies = {movie.id: movie for movie in load_movies(conn, ids)}
+        return [FeedbackMovie.of(movies[movie_id]) for movie_id in ids]
 
     @app.get("/api/users")
     def list_users(conn: Db) -> list[UserInfo]:
