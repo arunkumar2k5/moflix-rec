@@ -2,8 +2,17 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.chat import DEFAULT_DAILY_CAP, DEFAULT_TIMEOUT_S, ChatConfig
 from app.intent import Intent
-from app.llm import SYSTEM_PROMPT, IntentRequest, OpenRouterProvider, Pick, Turn, provider_from_env
+from app.llm import (
+    DEFAULT_MONTHLY_CAP_USD,
+    SYSTEM_PROMPT,
+    IntentRequest,
+    OpenRouterProvider,
+    Pick,
+    Turn,
+    provider_from_env,
+)
 
 
 def test_openrouter_sends_only_the_request_and_returns_the_reply_text():
@@ -60,3 +69,36 @@ def test_a_model_without_a_known_price_is_refused(monkeypatch):
 
     with pytest.raises(ValueError, match="claude-opus-4"):
         provider_from_env(timeout_s=3.0)
+
+
+def test_chat_config_from_env_builds_the_configured_provider_and_caps(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "key")
+    monkeypatch.setenv("OPENROUTER_MODEL", "anthropic/claude-3.5-haiku")
+    monkeypatch.setenv("MOFLIX_CHAT_DAILY_CAP", "7")
+    monkeypatch.setenv("MOFLIX_MONTHLY_CAP", "2.5")
+
+    config = ChatConfig.from_env()
+
+    assert isinstance(config.provider, OpenRouterProvider)
+    assert config.provider.model == "anthropic/claude-3.5-haiku"
+    assert config.provider._client.api_key == "key"
+    assert config.provider._client.timeout == DEFAULT_TIMEOUT_S
+    assert (config.daily_cap, config.monthly_cap_usd) == (7, 2.5)
+
+
+def test_chat_config_from_env_without_a_key_runs_in_simple_mode(monkeypatch):
+    for name in (
+        "OPENROUTER_API_KEY",
+        "OPENROUTER_MODEL",
+        "MOFLIX_CHAT_DAILY_CAP",
+        "MOFLIX_MONTHLY_CAP",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    config = ChatConfig.from_env()
+
+    assert config.provider is None
+    assert (config.daily_cap, config.monthly_cap_usd) == (
+        DEFAULT_DAILY_CAP,
+        DEFAULT_MONTHLY_CAP_USD,
+    )
