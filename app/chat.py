@@ -6,6 +6,7 @@ ends it and never touches the base taste vector.
 """
 
 import os
+import re
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
@@ -188,6 +189,14 @@ def _save_turn(
     )
 
 
+def _strip_fences(text: str) -> str:
+    text = text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```[^\n]*\n?", "", text)
+        text = re.sub(r"\n?```\s*$", "", text)
+    return text
+
+
 def parse_intent(
     config: ChatConfig,
     conn: sqlite3.Connection,
@@ -210,7 +219,7 @@ def parse_intent(
         logger.warning("llm_unavailable", exc_info=True)
         return simple_parse(request.message), "simple"
     try:
-        return Intent.model_validate_json(completion.text), "ai"
+        return Intent.model_validate_json(_strip_fences(completion.text)), "ai"
     except ValidationError:
         logger.warning("llm_invalid_intent", exc_info=True)
         return simple_parse(request.message), "simple"
@@ -295,4 +304,4 @@ def describe(intent: Intent, mode: Mode) -> str:
         reply = f"Got it: {'; '.join(parts)}. Here are your updated picks."
     else:
         reply = "I couldn't find anything to change in that, so your picks are as they were."
-    return reply if mode == "ai" else f"{SIMPLE_MODE_NOTICE}. {reply}"
+    return reply

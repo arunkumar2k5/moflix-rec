@@ -28,7 +28,7 @@ from pydantic import BaseModel
 from app.intent import Intent
 
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
-DEFAULT_MODEL = "anthropic/claude-3-haiku"
+DEFAULT_MODEL = "anthropic/claude-haiku-4.5"
 DEFAULT_MONTHLY_CAP_USD = 5.0
 # USD per million (input, output) tokens, as listed on https://openrouter.ai/models.
 MODEL_PRICES = {

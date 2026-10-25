@@ -70,7 +70,7 @@ from app.taste import WatchEvent
 from app.vectors import Movie
 
 SESSION_COOKIE = "session"
-CSRF_COOKIE = "__Host-csrf"
+CSRF_COOKIE = "csrf"
 CSRF_HEADER = "X-CSRF-Token"
 UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 TEMPLATES = Jinja2Templates(directory=Path(__file__).parent / "templates")
@@ -102,6 +102,11 @@ class MovieCard(BaseModel):
     genres: list[str]
     runtime: int
     poster_url: str
+    rating: float
+    overview: str
+    director: str
+    cast: list[str]
+    certification: str
 
     @classmethod
     def of(cls, movie: Movie) -> "MovieCard":
@@ -112,6 +117,11 @@ class MovieCard(BaseModel):
             genres=list(movie.genres),
             runtime=movie.runtime,
             poster_url=movie.poster_url,
+            rating=movie.rating,
+            overview=movie.overview,
+            director=movie.director,
+            cast=list(movie.cast),
+            certification=movie.certification,
         )
 
 
@@ -330,12 +340,13 @@ def create_app(
                 "home.html",
                 {
                     "csrf_token": csrf,
+                    "username": user.name,
                     "recs": recommendations(conn, user),
                     "tonight": watch_tonight(conn, user),
                     "simple_mode_notice": chat.SIMPLE_MODE_NOTICE,
                 },
             )
-        page.set_cookie(CSRF_COOKIE, csrf, httponly=True, secure=True, samesite="strict")
+        page.set_cookie(CSRF_COOKIE, csrf, httponly=True, secure=False, samesite="strict")
         return page
 
     @app.post("/auth/login")
@@ -357,7 +368,7 @@ def create_app(
             max_age=int(SESSION_LIFETIME.total_seconds()),
             expires=session.expires_at,
             httponly=True,
-            secure=True,
+            secure=False,
             samesite="lax",
         )
         return LoggedIn(username=user.name, role=user.role)

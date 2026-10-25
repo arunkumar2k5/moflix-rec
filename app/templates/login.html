@@ -1,36 +1,254 @@
-{% extends "base.html" %}
-{% block title %}Log in · moflix{% endblock %}
-{% block content %}
-<h1>moflix</h1>
-<form id="login-form">
-  <label for="username">Username</label>
-  <input id="username" name="username" autocomplete="username" required>
-  <label for="password">Password</label>
-  <input id="password" name="password" type="password" autocomplete="current-password" required>
-  <button type="submit">Log in</button>
-  <p id="login-error" role="alert"></p>
-</form>
-{% endblock %}
-{% block script %}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="csrf-token" content="{{ csrf_token }}">
+<title>Moflix</title>
+<style>
+*{box-sizing:border-box;margin:0}
+html,body{height:100%;background:#0b0710;overflow:hidden;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+
+/* room */
+#room{position:fixed;inset:0;overflow:hidden;z-index:1;background:#0b0710}
+#scene{position:absolute}
+#scene>svg{width:100%;height:100%;display:block}
+.m{animation:mote 7s ease-in-out infinite;opacity:.7}
+@keyframes mote{50%{transform:translate(8px,-18px);opacity:.2}}
+.flick{animation:flick 4s ease-in-out infinite}
+@keyframes flick{0%,100%{opacity:1}45%{opacity:.8}55%{opacity:.95}}
+
+/* TV screen */
+#tvScreen{position:absolute;left:40%;top:33.3333%;width:20%;height:20%;background:#0f0f0f;overflow:hidden;
+  border-radius:2px;box-shadow:0 0 50px 8px rgba(160,190,255,.35);pointer-events:none}
+#tvScreen::after{content:"";position:absolute;inset:0;opacity:var(--scan,1);
+  background:repeating-linear-gradient(0deg,rgba(255,255,255,.05) 0 1px,transparent 1px 3px);animation:flick 5s infinite;pointer-events:none}
+#tvLogo{position:absolute;inset:0;container-type:inline-size;display:flex;align-items:center;justify-content:center}
+#tvLogo .fb{font:900 20cqw Impact,"Arial Narrow",sans-serif;color:#e10b17;letter-spacing:.04em;animation:pulse 3s ease-in-out infinite}
+@keyframes pulse{50%{filter:drop-shadow(0 0 6px rgba(225,11,23,.7))}}
+
+/* login widget — top-right corner */
+#loginBox{position:fixed;top:20px;right:20px;z-index:10;background:rgba(0,0,0,.72);
+  border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:18px 20px;
+  width:260px;backdrop-filter:blur(12px)}
+#loginBox h2{font-size:14px;font-weight:700;color:#f3dcc0;letter-spacing:.12em;text-transform:uppercase;margin-bottom:14px}
+#loginBox select,#loginBox input{width:100%;padding:9px 12px;background:#1a1a1a;border:1px solid #2e2e2e;
+  border-radius:7px;color:#f3ede6;font-size:13px;margin-bottom:10px;appearance:none;-webkit-appearance:none}
+#loginBox select option{background:#1a1a1a}
+#loginBox input::placeholder{color:#666}
+#loginBox button{width:100%;padding:10px;background:#e10b17;color:#fff;border:0;border-radius:7px;
+  font-size:13px;font-weight:700;cursor:pointer;letter-spacing:.04em}
+#loginBox button:hover{background:#ff1a24}
+#loginBox button:disabled{opacity:.5;cursor:default}
+#loginErr{color:#ff7070;font-size:12px;margin-top:8px;min-height:1.2em}
+
+</style>
+</head>
+<body>
+
+<div id="room">
+  <div id="scene">
+    <svg viewBox="0 0 1600 900" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="wall" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#17101f"/><stop offset="1" stop-color="#2d1f2b"/></linearGradient>
+        <linearGradient id="floor" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2f1d15"/><stop offset="1" stop-color="#150b08"/></linearGradient>
+        <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0c1331"/><stop offset="1" stop-color="#2b2d5c"/></linearGradient>
+        <linearGradient id="sofa" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#744c38"/><stop offset="1" stop-color="#3d261b"/></linearGradient>
+        <linearGradient id="shade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffdca6"/><stop offset="1" stop-color="#f0a550"/></linearGradient>
+        <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#a9c4ff" stop-opacity=".9"/><stop offset=".5" stop-color="#a9c4ff" stop-opacity="0"/></linearGradient>
+        <radialGradient id="lamp" cx="1320" cy="330" r="600" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#ffb45a" stop-opacity=".6"/><stop offset=".4" stop-color="#ff9a3c" stop-opacity=".2"/><stop offset="1" stop-color="#ff9a3c" stop-opacity="0"/></radialGradient>
+        <radialGradient id="tvg" cx="800" cy="390" r="640" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#8fb0ff" stop-opacity=".4"/><stop offset=".45" stop-color="#6d8fe0" stop-opacity=".12"/><stop offset="1" stop-color="#6d8fe0" stop-opacity="0"/></radialGradient>
+        <radialGradient id="pool" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#ffb45a" stop-opacity=".35"/><stop offset="1" stop-color="#ffb45a" stop-opacity="0"/></radialGradient>
+        <radialGradient id="tvsoft" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#8fb0ff" stop-opacity=".45"/><stop offset="1" stop-color="#8fb0ff" stop-opacity="0"/></radialGradient>
+        <radialGradient id="vig" cx=".5" cy=".48" r=".78"><stop offset=".5" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".72"/></radialGradient>
+      </defs>
+      <rect width="1600" height="600" fill="url(#wall)"/>
+      <rect y="600" width="1600" height="300" fill="url(#floor)"/>
+      <rect y="590" width="1600" height="14" fill="#120a08"/>
+      <rect x="140" y="140" width="260" height="300" fill="url(#sky)"/>
+      <circle cx="335" cy="215" r="26" fill="#f4eccd" opacity=".9"/>
+      <g fill="#fff" opacity=".7"><circle cx="180" cy="180" r="2"/><circle cx="230" cy="250" r="1.6"/><circle cx="300" cy="170" r="1.8"/><circle cx="360" cy="330" r="1.6"/><circle cx="195" cy="340" r="2"/></g>
+      <rect x="140" y="140" width="260" height="300" fill="none" stroke="#3b2a22" stroke-width="10"/>
+      <path d="M270 140V440M140 290H400" stroke="#3b2a22" stroke-width="6"/>
+      <rect x="80" y="108" width="380" height="8" rx="4" fill="#2a1b14"/>
+      <rect x="96" y="116" width="74" height="350" rx="10" fill="#5b2a36"/>
+      <rect x="370" y="116" width="74" height="350" rx="10" fill="#5b2a36"/>
+      <path d="M118 120V460M142 120V460M392 120V460M418 120V460" stroke="#7a3a4a" stroke-width="3" opacity=".5"/>
+      <rect x="1090" y="170" width="96" height="124" fill="#1d2536" stroke="#4a3226" stroke-width="6"/>
+      <circle cx="1138" cy="215" r="22" fill="#e9a95a" opacity=".85"/>
+      <path d="M1096 288 L1130 240 L1152 268 L1170 250 L1180 288Z" fill="#2b3b5a"/>
+      <rect x="1210" y="205" width="70" height="92" fill="#2a2036" stroke="#4a3226" stroke-width="6"/>
+      <path d="M1222 285 Q1245 225 1268 285" fill="none" stroke="#c96a4a" stroke-width="6"/>
+      <circle cx="800" cy="390" r="640" fill="url(#tvg)"/>
+      <rect x="540" y="520" width="520" height="64" rx="6" fill="#4a2f22"/>
+      <rect x="536" y="514" width="528" height="10" rx="4" fill="#5d3b2b"/>
+      <rect x="560" y="584" width="18" height="26" fill="#2b1a12"/><rect x="1022" y="584" width="18" height="26" fill="#2b1a12"/>
+      <path d="M800 528V580" stroke="#2b1a12" stroke-width="3"/>
+      <circle cx="780" cy="554" r="3" fill="#c79a6a"/><circle cx="820" cy="554" r="3" fill="#c79a6a"/>
+      <rect x="572" y="482" width="34" height="34" rx="4" fill="#8a4b34"/>
+      <path d="M589 482C570 442 565 420 580 400C592 420 596 452 589 482Z" fill="#3f6b4a"/>
+      <path d="M589 482C612 450 622 430 612 410C596 430 588 456 589 482Z" fill="#4c7d56"/>
+      <rect x="1008" y="490" width="16" height="26" fill="#e8d9bf"/>
+      <ellipse cx="1016" cy="482" rx="4" ry="8" fill="#ffcf7a"/>
+      <circle cx="1016" cy="482" r="26" fill="url(#pool)"/>
+      <rect x="628" y="288" width="344" height="198" rx="8" fill="#0a0a0d"/>
+      <rect x="782" y="486" width="36" height="28" fill="#0e0e12"/>
+      <rect x="736" y="512" width="128" height="8" rx="3" fill="#0e0e12"/>
+      <ellipse cx="800" cy="790" rx="580" ry="110" fill="#5e3327" opacity=".9"/>
+      <ellipse cx="800" cy="790" rx="520" ry="90" fill="none" stroke="#8a5a3c" stroke-width="3"/>
+      <ellipse cx="1320" cy="722" rx="200" ry="30" fill="url(#pool)"/>
+      <rect x="1317" y="350" width="6" height="372" fill="#1c1310"/>
+      <ellipse cx="1320" cy="722" rx="42" ry="9" fill="#1c1310"/>
+      <polygon points="1286,268 1354,268 1384,350 1256,350" fill="url(#shade)"/>
+      <ellipse cx="1320" cy="268" rx="34" ry="5" fill="#f7c37e"/>
+      <ellipse cx="1320" cy="350" rx="64" ry="8" fill="#ffe6b8"/>
+      <circle cx="1320" cy="352" r="14" fill="#fff3d0" opacity=".9"/>
+      <rect x="1196" y="676" width="8" height="50" fill="#2b1a12"/>
+      <ellipse cx="1200" cy="668" rx="38" ry="8" fill="#4a2f22"/>
+      <rect x="1186" y="646" width="16" height="20" rx="3" fill="#d8c3a5"/>
+      <path d="M1194 640Q1190 630 1196 622" fill="none" stroke="#fff" stroke-opacity=".3" stroke-width="2"/>
+      <rect x="1208" y="658" width="24" height="8" fill="#8a3a3a"/>
+      <g>
+        <path d="M640 732C640 676 684 654 735 654C786 654 830 676 830 732Z" fill="#3b4a6b"/>
+        <path d="M640 732C640 676 684 654 735 654C786 654 830 676 830 732" fill="none" stroke="url(#rim)" stroke-width="3"/>
+        <rect x="720" y="634" width="30" height="28" rx="10" fill="#a56b4d"/>
+        <ellipse cx="692" cy="606" rx="6" ry="10" fill="#a56b4d"/><ellipse cx="770" cy="606" rx="6" ry="10" fill="#a56b4d"/>
+        <ellipse cx="731" cy="600" rx="39" ry="43" fill="#17120f"/>
+        <ellipse cx="731" cy="600" rx="39" ry="43" fill="none" stroke="url(#rim)" stroke-width="3"/>
+      </g>
+      <path d="M824 734C824 682 862 664 905 664C948 664 986 682 986 734Z" fill="#8a4f5a"/>
+      <path d="M824 734C824 682 862 664 905 664C948 664 986 682 986 734" fill="none" stroke="url(#rim)" stroke-width="3"/>
+      <g transform="rotate(-5 905 650)">
+        <path d="M866 614C858 668 866 704 882 720L930 720C946 704 952 668 944 614Z" fill="#20140f"/>
+        <ellipse cx="905" cy="612" rx="37" ry="43" fill="#20140f"/>
+        <circle cx="905" cy="566" r="17" fill="#20140f"/>
+        <ellipse cx="905" cy="612" rx="37" ry="43" fill="none" stroke="url(#rim)" stroke-width="3"/>
+        <circle cx="905" cy="566" r="17" fill="none" stroke="url(#rim)" stroke-width="3"/>
+      </g>
+      <path d="M470 900V706Q470 668 508 668H1092Q1130 668 1130 706V900Z" fill="url(#sofa)"/>
+      <path d="M508 670H1092" stroke="#d9a07a" stroke-opacity=".3" stroke-width="3" fill="none"/>
+      <path d="M800 674V900" stroke="#2f1a10" stroke-opacity=".6" stroke-width="3"/>
+      <rect x="440" y="694" width="72" height="206" rx="34" fill="#5b3a2b"/>
+      <rect x="1088" y="694" width="72" height="206" rx="34" fill="#5b3a2b"/>
+      <path d="M1092 700Q1128 690 1156 706L1160 790Q1124 800 1092 788Z" fill="#c9893f"/>
+      <path d="M1098 724Q1128 718 1158 730M1098 748Q1128 742 1159 754" fill="none" stroke="#e8b06a" stroke-width="3"/>
+      <g style="mix-blend-mode:screen">
+        <circle cx="1320" cy="330" r="600" fill="url(#lamp)"/>
+        <g class="flick"><ellipse cx="800" cy="660" rx="320" ry="130" fill="url(#tvsoft)" opacity=".5"/></g>
+      </g>
+      <g fill="#ffe0a8">
+        <circle class="m" cx="1250" cy="430" r="2.2"/><circle class="m" cx="1380" cy="500" r="1.8" style="animation-delay:-2s"/>
+        <circle class="m" cx="1180" cy="360" r="1.6" style="animation-delay:-4s"/><circle class="m" cx="1300" cy="600" r="2" style="animation-delay:-1s"/>
+        <circle class="m" cx="980" cy="440" r="1.6" style="animation-delay:-3s"/><circle class="m" cx="620" cy="440" r="1.8" style="animation-delay:-5s"/>
+      </g>
+      <rect width="1600" height="900" fill="url(#vig)"/>
+    </svg>
+
+    <div id="tvScreen">
+      <div id="tvLogo">
+        <span class="fb">MOFLIX</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- login widget top-right -->
+<div id="loginBox">
+  <h2>Who's watching?</h2>
+  <select id="username" aria-label="Select user"><option value="">Select user…</option></select>
+  <input id="password" type="password" placeholder="Password" autocomplete="current-password">
+  <button id="loginBtn">Log in</button>
+  <div id="loginErr" role="alert"></div>
+</div>
+
+
 <script>
-  const LOGIN_ERRORS = {
-    401: "Wrong username or password",
-    403: "This page expired — reload and try again",
-    429: "Too many attempts, try again later",
-  };
-  document.getElementById("login-form").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const error = document.getElementById("login-error");
-    error.textContent = "";
-    const response = await post("/auth/login", {
-      username: document.getElementById("username").value,
-      password: document.getElementById("password").value,
-    });
-    if (response.ok) {
-      location.assign("/");
-    } else {
-      error.textContent = LOGIN_ERRORS[response.status] ?? "Something went wrong";
-    }
+const CSRF = document.querySelector('meta[name="csrf-token"]').content;
+
+/* load users */
+fetch('/api/users').then(r => r.json()).then(users => {
+  const sel = document.getElementById('username');
+  users.forEach(u => {
+    const o = document.createElement('option');
+    o.value = u.name; o.textContent = u.name; sel.appendChild(o);
   });
+}).catch(() => {
+  document.getElementById('loginErr').textContent = 'Could not load users';
+});
+
+/* login + zoom-in then navigate */
+async function doLogin() {
+  const username = document.getElementById('username').value;
+  const password = document.getElementById('password').value;
+  const err = document.getElementById('loginErr');
+  err.textContent = '';
+  if (!username) { err.textContent = 'Please select a user'; return; }
+  if (!password) { err.textContent = 'Enter your password'; return; }
+  const btn = document.getElementById('loginBtn');
+  btn.disabled = true; btn.textContent = 'Logging in…';
+  try {
+    const r = await fetch('/auth/login', {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF },
+      body: JSON.stringify({ username, password })
+    });
+    if (r.ok) {
+      document.getElementById('loginBox').style.opacity = '0';
+      tweenTo(1, 1400);
+      setTimeout(() => location.assign('/'), 1500);
+    } else {
+      const msg = { 401: 'Wrong username or password', 403: 'Page expired — reload', 429: 'Too many attempts' };
+      err.textContent = msg[r.status] || 'Something went wrong';
+      btn.disabled = false; btn.textContent = 'Log in';
+    }
+  } catch(e) {
+    err.textContent = 'Network error'; btn.disabled = false; btn.textContent = 'Log in';
+  }
+}
+document.getElementById('loginBtn').onclick = doLogin;
+document.getElementById('password').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+
+/* zoom engine */
+const scene = document.getElementById('scene');
+const tvScreen = document.getElementById('tvScreen');
+const clamp = (x,a=0,b=1) => Math.min(b, Math.max(a, x));
+const easeIO = u => u < .5 ? 4*u*u*u : 1 - Math.pow(-2*u+2, 3)/2;
+let p=0, mode='idle', tw=null, raf=0, last=0, kEnd=5, dx=0, dy=0;
+
+function layout() {
+  const vw=innerWidth, vh=innerHeight;
+  const cw=Math.max(vw, vh*16/9), ch=cw*9/16;
+  Object.assign(scene.style, {width:cw+'px', height:ch+'px', left:(vw-cw)/2+'px', top:(vh-ch)/2+'px',
+    transformOrigin:(0.5*cw)+'px '+(0.43333*ch)+'px'});
+  kEnd = Math.max(vw/(0.2*cw), vh/(0.2*ch));
+  dx = 0; dy = vh/2 - ((vh-ch)/2 + 0.43333*ch);
+  render();
+}
+
+function render() {
+  const f = 1 - Math.pow(1-p, 1.8);
+  const k = Math.exp(Math.log(kEnd)*p);
+  scene.style.transform = `translate(${dx*f}px,${dy*f}px) scale(${k})`;
+  tvScreen.style.setProperty('--scan', 1 - clamp((p-.0)/(.4-.0)));
+}
+
+function kick() { if (!raf) { last = performance.now(); raf = requestAnimationFrame(frame); } }
+function tweenTo(to, ms) { tw = {from:p, to, t0:performance.now(), ms}; mode='tween'; kick(); }
+
+function frame(t) {
+  raf = 0;
+  last = t;
+  if (mode==='tween' && tw) {
+    const u = clamp((t-tw.t0)/tw.ms);
+    p = tw.from + (tw.to-tw.from)*easeIO(u);
+    if (u >= 1) { p=tw.to; mode='idle'; tw=null; }
+  }
+  render();
+  if (mode !== 'idle') kick();
+}
+
+addEventListener('resize', layout);
+layout();
 </script>
-{% endblock %}
+</body>
+</html>

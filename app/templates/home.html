@@ -1,157 +1,392 @@
-{% extends "base.html" %}
-{% macro card(m) -%}
-<article class="card" data-movie-id="{{ m.movie_id if m }}">
-  <img class="card-poster" alt=""{% if m and m.poster_url %} src="{{ m.poster_url }}"{% else %} hidden{% endif %}>
-  <h2 class="card-title">{{ m.title if m }}</h2>
-  <p class="card-meta"><span class="card-year">{{ m.year if m }}</span> · <span class="card-genres">{{ m.genres | join(", ") if m }}</span></p>
-  <p class="card-reason">{{ m.reason if m }}</p>
-  <div class="card-actions">
-    <button type="button" data-action="watch_tonight" aria-pressed="false">Watch tonight</button>
-    <button type="button" data-action="not_interested">Not interested</button>
-    <button type="button" data-action="already_seen">Already seen</button>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="csrf-token" content="{{ csrf_token }}">
+<title>Moflix</title>
+<style>
+*{box-sizing:border-box;margin:0}
+html{background:#0f0f0f}
+body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:radial-gradient(1200px 600px at 75% -10%,#3b1b14 0%,#0f0f0f 62%);color:#f3ede6;min-height:100dvh}
+
+/* header */
+.hd{display:flex;align-items:center;gap:24px;padding:16px 40px;background:#0f0f0fcc;position:sticky;top:0;z-index:10;backdrop-filter:blur(8px);border-bottom:1px solid #1f1f1f}
+.logo{font:900 26px/1 Impact,"Arial Narrow",sans-serif;color:#e10b17;letter-spacing:.03em;flex:none}
+.nav{display:flex;gap:22px;font-size:15px;color:#cfc4b8}
+.nav b{color:#fff;font-weight:600}
+.who{margin-left:auto;display:flex;align-items:center;gap:12px;font-size:14px;color:#cfc4b8}
+.who span{background:#1e1e1e;border:1px solid #333;border-radius:20px;padding:6px 14px}
+.logout-btn{background:none;border:1px solid #444;color:#cfc4b8;border-radius:20px;padding:6px 14px;font-size:13px;cursor:pointer}
+.logout-btn:hover{border-color:#aaa;color:#fff}
+@media(max-width:600px){.nav{display:none}.hd{padding:12px 16px;gap:12px}}
+
+/* hero */
+.hero{padding:56px 40px 32px;max-width:800px}
+.hero-tag{letter-spacing:.22em;font-size:12px;color:#f0a65a;text-transform:uppercase}
+.hero h1{font-size:52px;line-height:1.05;margin:12px 0 12px;font-weight:800}
+.hero p{color:#cbbfb2;font-size:18px;max-width:540px}
+@media(max-width:600px){.hero{padding:32px 16px 20px}.hero h1{font-size:34px}.hero p{font-size:15px}}
+
+/* onboarding prompt */
+#onboarding{margin:0 40px 8px;padding:14px 18px;background:#1e1a10;border-left:3px solid #f0a65a;border-radius:4px;color:#f0c878;font-size:15px}
+#onboarding[hidden]{display:none}
+@media(max-width:600px){ #onboarding{margin:0 16px 8px}}
+
+/* rail sections */
+.row{padding:16px 40px 8px}
+.row h2{font-size:20px;margin-bottom:14px;font-weight:700}
+.rail{display:flex;gap:14px;overflow-x:auto;scroll-snap-type:x mandatory;padding-bottom:12px;-ms-overflow-style:none;scrollbar-width:none}
+.rail::-webkit-scrollbar{display:none}
+@media(max-width:600px){.row{padding:14px 16px 6px}}
+
+/* pick card */
+.card{flex:0 0 160px;scroll-snap-align:start;position:relative;border-radius:10px;overflow:hidden;background:#1a1a1a;cursor:default}
+.card-img{width:100%;aspect-ratio:2/3;object-fit:cover;display:block;background:linear-gradient(160deg,hsl(var(--hue,200) 40% 25%),hsl(var(--hue,200) 50% 12%))}
+.card-info{padding:10px}
+.card-title{font-size:13px;font-weight:600;line-height:1.2;margin-bottom:4px}
+.card-meta{font-size:11px;color:#aaa;margin-bottom:6px}
+.card-reason{font-size:11px;color:#c8b8a8;line-height:1.3;margin-bottom:8px}
+.card-score{display:inline-block;font-size:11px;font-weight:700;color:#4fc36a;margin-bottom:8px}
+.card-actions{display:flex;flex-direction:column;gap:5px}
+.card-actions button{width:100%;padding:6px 8px;font-size:11px;border:0;border-radius:5px;cursor:pointer;font-weight:500}
+.btn-wt{background:#e10b17;color:#fff}
+.btn-wt[aria-pressed="true"]{background:#2e7d32}
+.btn-ni{background:#2a2a2a;color:#ccc}
+.btn-ni:hover{background:#3a3a3a}
+.btn-as{background:#2a2a2a;color:#ccc}
+.btn-as:hover{background:#3a3a3a}
+.card-status{font-size:11px;color:#aaa;text-align:center;min-height:1.2em;margin-top:4px}
+@media(max-width:600px){.card{flex:0 0 140px}}
+
+/* watch tonight list */
+#tonight-section{padding:16px 40px 8px}
+#tonight-section h2{font-size:20px;margin-bottom:14px;font-weight:700}
+#tonight-list{list-style:none;padding:0;display:flex;flex-direction:column;gap:6px}
+#tonight-list li{padding:10px 14px;background:#1a1a1a;border-radius:8px;font-size:14px;color:#f3ede6}
+.tonight-empty{color:#888;font-size:14px;padding:4px 0}
+@media(max-width:600px){ #tonight-section{padding:14px 16px 6px}}
+
+/* chat */
+#chat-section{padding:20px 40px 40px}
+#chat-section h2{font-size:20px;margin-bottom:14px;font-weight:700}
+#chat-form{display:flex;gap:10px;margin-bottom:12px}
+#chat-input{flex:1;padding:11px 14px;background:#1a1a1a;border:1px solid #333;border-radius:8px;color:#f3ede6;font-size:14px}
+#chat-input:focus{outline:none;border-color:#e10b17}
+#chat-submit{padding:11px 20px;background:#e10b17;color:#fff;border:0;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;white-space:nowrap}
+#chat-submit:hover{background:#ff1a24}
+#chat-reply{font-size:14px;color:#f0c878;min-height:1.4em;margin-bottom:6px}
+#understood{font-size:13px;color:#888;margin-bottom:6px}
+#simple-notice{font-size:13px;color:#666;margin-bottom:6px}
+#chat-error{font-size:13px;color:#ff8a80;min-height:1.2em;margin-bottom:8px}
+#reset-btn{background:none;border:1px solid #444;color:#aaa;border-radius:16px;padding:5px 14px;font-size:12px;cursor:pointer}
+#reset-btn:hover{border-color:#aaa;color:#fff}
+@media(max-width:600px){ #chat-section{padding:16px 16px 32px} #chat-form{flex-direction:column} #chat-submit{width:100%}}
+
+/* footer */
+footer{padding:30px 40px 50px;color:#555;font-size:13px;border-top:1px solid #1a1a1a;margin-top:20px}
+@media(max-width:600px){footer{padding:24px 16px 40px}}
+
+/* movie detail modal */
+.card{cursor:pointer}
+.card-actions button{cursor:pointer}
+#detail-backdrop{position:fixed;inset:0;background:#000c;z-index:100;display:flex;align-items:center;justify-content:center;padding:20px;opacity:0;transition:opacity .2s}
+#detail-backdrop.open{opacity:1}
+#detail-backdrop[hidden]{display:none}
+#detail-modal{background:#1a1a1a;border-radius:14px;max-width:680px;width:100%;max-height:90dvh;overflow-y:auto;transform:scale(.88);transition:transform .22s cubic-bezier(.34,1.3,.64,1);display:flex;flex-direction:column}
+#detail-backdrop.open #detail-modal{transform:scale(1)}
+.dm-top{display:flex;gap:0;flex:none}
+.dm-poster{width:180px;flex:none;object-fit:cover;border-radius:14px 0 0 0;background:#111;aspect-ratio:2/3;display:block}
+.dm-poster-ph{width:180px;flex:none;border-radius:14px 0 0 0;background:linear-gradient(160deg,#2a2a3a,#111);aspect-ratio:2/3}
+.dm-head{padding:22px 22px 16px;flex:1;min-width:0}
+.dm-title{font-size:22px;font-weight:800;line-height:1.15;margin-bottom:6px}
+.dm-meta{font-size:13px;color:#aaa;margin-bottom:10px;display:flex;flex-wrap:wrap;gap:6px 12px}
+.dm-badge{background:#2a2a2a;border-radius:4px;padding:2px 7px;font-size:12px;color:#ddd;white-space:nowrap}
+.dm-rating{background:#1f3a1f;color:#4fc36a;font-weight:700}
+.dm-genres{font-size:13px;color:#c8b8a8;margin-bottom:10px;line-height:1.5}
+.dm-crew{font-size:13px;color:#b0a898;margin-bottom:6px}
+.dm-crew b{color:#e8dfd4}
+.dm-body{padding:0 22px 22px}
+.dm-overview{font-size:14px;color:#cbbfb2;line-height:1.6}
+.dm-close{position:absolute;top:14px;right:16px;background:none;border:none;color:#888;font-size:22px;cursor:pointer;line-height:1;padding:4px 8px;border-radius:6px}
+.dm-close:hover{color:#fff;background:#2a2a2a}
+#detail-modal{position:relative}
+@media(max-width:600px){.dm-poster,.dm-poster-ph{width:120px}.dm-title{font-size:17px}.dm-head{padding:14px 14px 10px}.dm-body{padding:0 14px 16px}}
+</style>
+</head>
+<body>
+
+<header class="hd">
+  <div class="logo">MOFLIX</div>
+  <nav class="nav"><b>Home</b><span>Movies</span><span>TV Shows</span></nav>
+  <div class="who">
+    <span id="username-display">{{ username }}</span>
+    <button class="logout-btn" id="logout-btn">Log out</button>
   </div>
-  <p class="card-status" role="status"></p>
-</article>
-{%- endmacro %}
-{% block content %}
-<h1>Tonight's picks</h1>
-<p id="onboarding"{% if not recs.onboarding_prompt %} hidden{% endif %}>{{ recs.onboarding_prompt or "" }}</p>
-<section id="picks">
-{% for m in recs.items %}
-{{ card(m) }}
-{% endfor %}
+</header>
+
+<section class="hero">
+  <div class="hero-tag">Tonight</div>
+  <h1>Friday night,<br>sorted {{ username }}.</h1>
+  <p>Your personal picks based on what you actually watch.</p>
 </section>
-<template id="card-template">{{ card(None) }}</template>
 
-<form id="chat-form">
-  <label for="chat-input">Ask for something different</label>
-  <input id="chat-input" name="message" maxlength="1000" required placeholder="something from the 90s">
-  <button type="submit">Send</button>
-</form>
-<p id="simple-notice" class="muted" hidden>{{ simple_mode_notice }}</p>
-<p id="chat-reply"></p>
-<p id="understood" class="muted"></p>
-<p id="chat-error" role="alert"></p>
-<button id="reset-tuning" type="button">Reset tuning</button>
+<div id="onboarding"{% if not recs.onboarding_prompt %} hidden{% endif %}>{{ recs.onboarding_prompt or "" }}</div>
 
-<section id="watch-tonight">
+<section class="row">
+  <h2>Top picks for you</h2>
+  <div class="rail" id="picks">
+    {% for m in recs.items %}
+    <article class="card" data-movie-id="{{ m.movie_id }}" style="--hue:{{ loop.index0 * 47 + 12 }}"
+      data-detail='{"title":{{ m.title | tojson }},"year":{{ m.year }},"genres":{{ m.genres | tojson }},"runtime":{{ m.runtime }},"rating":{{ m.rating }},"certification":{{ m.certification | tojson }},"director":{{ m.director | tojson }},"cast":{{ m.cast | tojson }},"overview":{{ m.overview | tojson }},"poster_url":{{ m.poster_url | tojson }}}'>
+      {% if m.poster_url %}
+      <img class="card-img" src="{{ m.poster_url }}" alt="{{ m.title }}" loading="lazy" onerror="this.style.display='none'">
+      {% else %}
+      <div class="card-img"></div>
+      {% endif %}
+      <div class="card-info">
+        <div class="card-title">{{ m.title }}</div>
+        <div class="card-meta">{{ m.year }} · {{ m.genres | join(", ") }}</div>
+        <div class="card-reason">{{ m.reason }}</div>
+        <div class="card-actions">
+          <button class="btn-wt" data-action="watch_tonight" aria-pressed="false">Watch tonight</button>
+          <button class="btn-ni" data-action="not_interested">Not interested</button>
+          <button class="btn-as" data-action="already_seen">Already seen</button>
+        </div>
+        <div class="card-status" role="status"></div>
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+</section>
+
+<section id="tonight-section">
   <h2>Saved for tonight</h2>
-  <p id="tonight-empty" class="muted"{% if tonight %} hidden{% endif %}>Nothing saved yet.</p>
-  <ul>
-  {% for m in tonight %}
+  <p class="tonight-empty"{% if tonight %} hidden{% endif %} id="tonight-empty">Nothing saved yet.</p>
+  <ul id="tonight-list">
+    {% for m in tonight %}
     <li data-movie-id="{{ m.movie_id }}">{{ m.title }}</li>
-  {% endfor %}
+    {% endfor %}
   </ul>
 </section>
-{% endblock %}
-{% block script %}
+
+<section id="chat-section">
+  <h2>Ask for something different</h2>
+  <form id="chat-form">
+    <input id="chat-input" name="message" maxlength="1000" placeholder="Something from the 90s, under 2 hours…" required>
+    <button id="chat-submit" type="submit">Send</button>
+  </form>
+  <div id="chat-reply"></div>
+  <div id="understood" class="muted"></div>
+  <div id="chat-error" role="alert"></div>
+  <button id="reset-btn" type="button">Reset tuning</button>
+</section>
+
+<footer>Moflix &middot; private screening room</footer>
+
+<div id="detail-backdrop" hidden aria-modal="true" role="dialog" aria-labelledby="dm-title-el">
+  <div id="detail-modal">
+    <button class="dm-close" id="dm-close" aria-label="Close">&#x2715;</button>
+    <div class="dm-top">
+      <img id="dm-poster" class="dm-poster" alt="" hidden>
+      <div id="dm-poster-ph" class="dm-poster-ph"></div>
+      <div class="dm-head">
+        <div class="dm-title" id="dm-title-el"></div>
+        <div class="dm-meta" id="dm-meta"></div>
+        <div class="dm-genres" id="dm-genres"></div>
+        <div class="dm-crew" id="dm-crew"></div>
+      </div>
+    </div>
+    <div class="dm-body">
+      <div class="dm-overview" id="dm-overview"></div>
+    </div>
+  </div>
+</div>
+
+<template id="card-tpl">
+  <article class="card" style="--hue:200">
+    <div class="card-img"></div>
+    <div class="card-info">
+      <div class="card-title"></div>
+      <div class="card-meta"></div>
+      <div class="card-reason"></div>
+      <div class="card-actions">
+        <button class="btn-wt" data-action="watch_tonight" aria-pressed="false">Watch tonight</button>
+        <button class="btn-ni" data-action="not_interested">Not interested</button>
+        <button class="btn-as" data-action="already_seen">Already seen</button>
+      </div>
+      <div class="card-status" role="status"></div>
+    </div>
+  </article>
+</template>
+
 <script>
-  const ERRORS = {
-    403: "This page expired — reload and try again",
-    429: "Daily chat limit reached",
-  };
-  const errorText = (response) => ERRORS[response.status] ?? "Something went wrong";
-  const picks = document.getElementById("picks");
+const CSRF = document.querySelector('meta[name="csrf-token"]').content;
 
-  function renderCards(items) {
-    const template = document.getElementById("card-template");
-    picks.replaceChildren(...items.map((item) => {
-      const card = template.content.firstElementChild.cloneNode(true);
-      card.dataset.movieId = item.movie_id;
-      const poster = card.querySelector(".card-poster");
-      poster.src = item.poster_url;
-      poster.hidden = !item.poster_url;
-      card.querySelector(".card-title").textContent = item.title;
-      card.querySelector(".card-year").textContent = item.year;
-      card.querySelector(".card-genres").textContent = item.genres.join(", ");
-      card.querySelector(".card-reason").textContent = item.reason;
-      return card;
-    }));
-  }
-
-  function understoodText(intent) {
-    const parts = [];
-    for (const [genre, weight] of Object.entries(intent.genre_adjust)) {
-      parts.push(`${weight > 0 ? "more" : "less"} ${genre}`);
-    }
-    if (intent.mood_pace) parts.push(intent.mood_pace);
-    if (intent.era) parts.push(`from ${intent.era.from} to ${intent.era.to}`);
-    if (intent.runtime?.min != null) parts.push(`at least ${intent.runtime.min} minutes`);
-    if (intent.runtime?.max != null) parts.push(`at most ${intent.runtime.max} minutes`);
-    if (intent.language.length) parts.push(`in ${intent.language.join(" or ")}`);
-    if (intent.similar_to.length) parts.push(`like ${intent.similar_to.join(", ")}`);
-    if (intent.unlike.length) parts.push(`unlike ${intent.unlike.join(", ")}`);
-    const { require, exclude } = intent.hard_filters;
-    const only = [...require.genres, ...require.terms];
-    const no = [...exclude.genres, ...exclude.terms];
-    if (only.length) parts.push(`only ${only.join(", ")}`);
-    if (no.length) parts.push(`no ${no.join(", ")}`);
-    if (intent.reaction) {
-      parts.push(`you ${intent.reaction.liked ? "liked" : "did not like"} ${intent.reaction.title}`);
-    }
-    return parts.length ? parts.join("; ") : "nothing to change";
-  }
-
-  function saveForTonight(card) {
-    const list = document.querySelector("#watch-tonight ul");
-    const id = card.dataset.movieId;
-    if (!list.querySelector(`li[data-movie-id="${CSS.escape(id)}"]`)) {
-      const item = document.createElement("li");
-      item.dataset.movieId = id;
-      item.textContent = card.querySelector(".card-title").textContent;
-      list.append(item);
-    }
-    document.getElementById("tonight-empty").hidden = true;
-  }
-
-  picks.addEventListener("click", async (event) => {
-    const button = event.target.closest("button[data-action]");
-    if (!button) return;
-    const card = button.closest(".card");
-    const status = card.querySelector(".card-status");
-    const action = button.dataset.action;
-    status.textContent = "";
-    const response = await post("/feedback", { movie_id: Number(card.dataset.movieId), action });
-    if (!response.ok) {
-      status.textContent = errorText(response);
-    } else if (action === "watch_tonight") {
-      button.setAttribute("aria-pressed", "true");
-      button.textContent = "Saved for tonight";
-      saveForTonight(card);
-    } else {
-      card.querySelector(".card-actions").remove();
-      status.textContent = `Hidden: ${button.textContent}`;
-    }
+function post(path, body) {
+  return fetch(path, {
+    method: 'POST', credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF },
+    body: JSON.stringify(body ?? {})
   });
+}
 
-  document.getElementById("chat-form").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const input = document.getElementById("chat-input");
-    const error = document.getElementById("chat-error");
-    error.textContent = "";
-    const response = await post("/chat", { message: input.value });
-    if (!response.ok) {
-      error.textContent = errorText(response);
-      return;
-    }
-    const reply = await response.json();
-    renderCards(reply.items);
-    const onboarding = document.getElementById("onboarding");
-    onboarding.textContent = reply.onboarding_prompt ?? "";
-    onboarding.hidden = !reply.onboarding_prompt;
-    document.getElementById("simple-notice").hidden = reply.mode !== "simple";
-    document.getElementById("understood").textContent = `I understood: ${understoodText(reply.understood)}`;
-    document.getElementById("chat-reply").textContent = reply.reply;
-    input.value = "";
-  });
+/* logout */
+document.getElementById('logout-btn').onclick = async () => {
+  await post('/auth/logout');
+  location.assign('/');
+};
 
-  document.getElementById("reset-tuning").addEventListener("click", async () => {
-    const response = await post("/chat/reset");
-    if (response.ok) {
-      location.reload();
-    } else {
-      document.getElementById("chat-error").textContent = errorText(response);
-    }
+/* feedback */
+function makeCard(item, idx) {
+  const tpl = document.getElementById('card-tpl').content.firstElementChild.cloneNode(true);
+  tpl.dataset.movieId = item.movie_id;
+  tpl.dataset.detail = JSON.stringify({
+    title: item.title, year: item.year, genres: item.genres, runtime: item.runtime,
+    rating: item.rating, certification: item.certification, director: item.director,
+    cast: item.cast, overview: item.overview, poster_url: item.poster_url
   });
+  tpl.style.setProperty('--hue', (idx * 47 + 12) % 360);
+  const img = document.createElement('img');
+  img.className = 'card-img'; img.alt = item.title; img.loading = 'lazy';
+  img.src = item.poster_url || '';
+  if (!item.poster_url) img.style.display = 'none';
+  img.onerror = () => img.style.display = 'none';
+  tpl.insertBefore(img, tpl.firstChild);
+  tpl.querySelector('.card-img:not(img)').remove();
+  tpl.querySelector('.card-title').textContent = item.title;
+  tpl.querySelector('.card-meta').textContent = `${item.year} · ${item.genres.join(', ')}`;
+  tpl.querySelector('.card-reason').textContent = item.reason || '';
+  return tpl;
+}
+
+/* detail modal */
+const backdrop = document.getElementById('detail-backdrop');
+function openDetail(d) {
+  document.getElementById('dm-title-el').textContent = d.title;
+  const meta = document.getElementById('dm-meta');
+  meta.innerHTML = '';
+  const badges = [
+    d.year,
+    d.runtime ? `${d.runtime} min` : null,
+    d.certification || null,
+    d.rating ? `⭐ ${d.rating.toFixed(1)} / 10` : null,
+  ].filter(Boolean);
+  badges.forEach((b, i) => {
+    const span = document.createElement('span');
+    span.className = 'dm-badge' + (i === badges.length - 1 && d.rating ? ' dm-rating' : '');
+    span.textContent = b;
+    meta.appendChild(span);
+  });
+  document.getElementById('dm-genres').textContent = d.genres?.join(' · ') || '';
+  const crew = document.getElementById('dm-crew');
+  const parts = [];
+  if (d.director) parts.push(`<b>Director</b> ${d.director}`);
+  if (d.cast?.length) parts.push(`<b>Cast</b> ${d.cast.slice(0, 3).join(', ')}`);
+  crew.innerHTML = parts.join('&ensp;·&ensp;');
+  document.getElementById('dm-overview').textContent = d.overview || 'No overview available.';
+  const poster = document.getElementById('dm-poster');
+  const ph = document.getElementById('dm-poster-ph');
+  if (d.poster_url) {
+    poster.src = d.poster_url; poster.alt = d.title;
+    poster.hidden = false; ph.hidden = true;
+  } else {
+    poster.hidden = true; ph.hidden = false;
+  }
+  backdrop.hidden = false;
+  requestAnimationFrame(() => backdrop.classList.add('open'));
+}
+function closeDetail() {
+  backdrop.classList.remove('open');
+  backdrop.addEventListener('transitionend', () => { backdrop.hidden = true; }, { once: true });
+}
+document.getElementById('dm-close').onclick = closeDetail;
+backdrop.addEventListener('click', e => { if (e.target === backdrop) closeDetail(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !backdrop.hidden) closeDetail(); });
+
+function renderPicks(items) {
+  const rail = document.getElementById('picks');
+  rail.replaceChildren(...items.map((item, i) => makeCard(item, i)));
+}
+
+const ERRS = { 403: 'Page expired — reload', 429: 'Daily chat limit reached' };
+
+document.getElementById('picks').addEventListener('click', async e => {
+  const btn = e.target.closest('button[data-action]');
+  if (!btn) {
+    const card = e.target.closest('.card');
+    if (card?.dataset.detail) openDetail(JSON.parse(card.dataset.detail));
+    return;
+  }
+  const card = btn.closest('.card');
+  const status = card.querySelector('.card-status');
+  const action = btn.dataset.action;
+  status.textContent = '';
+  const r = await post('/feedback', { movie_id: Number(card.dataset.movieId), action });
+  if (!r.ok) {
+    status.textContent = ERRS[r.status] || 'Something went wrong';
+  } else if (action === 'watch_tonight') {
+    btn.setAttribute('aria-pressed', 'true');
+    btn.textContent = 'Saved ✓';
+    const list = document.getElementById('tonight-list');
+    if (!list.querySelector(`[data-movie-id="${card.dataset.movieId}"]`)) {
+      const li = document.createElement('li');
+      li.dataset.movieId = card.dataset.movieId;
+      li.textContent = card.querySelector('.card-title').textContent;
+      list.append(li);
+      document.getElementById('tonight-empty').hidden = true;
+    }
+  } else {
+    card.querySelector('.card-actions').remove();
+    status.textContent = action === 'not_interested' ? 'Hidden' : 'Marked seen';
+  }
+});
+
+/* chat */
+function understoodText(intent) {
+  const parts = [];
+  for (const [genre, weight] of Object.entries(intent.genre_adjust || {}))
+    parts.push(`${weight > 0 ? 'more' : 'less'} ${genre}`);
+  if (intent.mood_pace) parts.push(intent.mood_pace);
+  if (intent.era) parts.push(`from ${intent.era.from} to ${intent.era.to}`);
+  if (intent.runtime?.min != null) parts.push(`at least ${intent.runtime.min} min`);
+  if (intent.runtime?.max != null) parts.push(`at most ${intent.runtime.max} min`);
+  if (intent.language?.length) parts.push(`in ${intent.language.join(' or ')}`);
+  if (intent.similar_to?.length) parts.push(`like ${intent.similar_to.join(', ')}`);
+  if (intent.unlike?.length) parts.push(`unlike ${intent.unlike.join(', ')}`);
+  const { require, exclude } = intent.hard_filters || { require: {}, exclude: {} };
+  const only = [...(require.genres || []), ...(require.terms || [])];
+  const no = [...(exclude.genres || []), ...(exclude.terms || [])];
+  if (only.length) parts.push(`only ${only.join(', ')}`);
+  if (no.length) parts.push(`no ${no.join(', ')}`);
+  if (intent.reaction) parts.push(`you ${intent.reaction.liked ? 'liked' : 'did not like'} ${intent.reaction.title}`);
+  return parts.length ? parts.join('; ') : 'nothing to change';
+}
+
+document.getElementById('chat-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const input = document.getElementById('chat-input');
+  const errEl = document.getElementById('chat-error');
+  errEl.textContent = '';
+  const btn = document.getElementById('chat-submit');
+  btn.disabled = true; btn.textContent = '…';
+  const r = await post('/chat', { message: input.value });
+  btn.disabled = false; btn.textContent = 'Send';
+  if (!r.ok) { errEl.textContent = ERRS[r.status] || 'Something went wrong'; return; }
+  const reply = await r.json();
+  renderPicks(reply.items);
+  const ob = document.getElementById('onboarding');
+  ob.textContent = reply.onboarding_prompt ?? ''; ob.hidden = !reply.onboarding_prompt;
+  document.getElementById('understood').textContent = reply.understood ? `I understood: ${understoodText(reply.understood)}` : '';
+  document.getElementById('chat-reply').textContent = reply.reply;
+  input.value = '';
+});
+
+document.getElementById('reset-btn').onclick = async () => {
+  const r = await post('/chat/reset');
+  if (r.ok) location.reload();
+  else document.getElementById('chat-error').textContent = ERRS[r.status] || 'Something went wrong';
+};
 </script>
-{% endblock %}
+</body>
+</html>
