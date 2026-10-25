@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Log in · moflix{% endblock %}
+{% block content %}
+<h1>moflix</h1>
+<form id="login-form">
+  <label for="username">Username</label>
+  <input id="username" name="username" autocomplete="username" required>
+  <label for="password">Password</label>
+  <input id="password" name="password" type="password" autocomplete="current-password" required>
+  <button type="submit">Log in</button>
+  <p id="login-error" role="alert"></p>
+</form>
+{% endblock %}
+{% block script %}
+<script>
+  const LOGIN_ERRORS = {
+    401: "Wrong username or password",
+    403: "This page expired — reload and try again",
+    429: "Too many attempts, try again later",
+  };
+  document.getElementById("login-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const error = document.getElementById("login-error");
+    error.textContent = "";
+    const response = await post("/auth/login", {
+      username: document.getElementById("username").value,
+      password: document.getElementById("password").value,
+    });
+    if (response.ok) {
+      location.assign("/");
+    } else {
+      error.textContent = LOGIN_ERRORS[response.status] ?? "Something went wrong";
+    }
+  });
+</script>
+{% endblock %}
