@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+{% macro card(m) -%}
+<article class="card" data-movie-id="{{ m.movie_id if m }}">
+  <img class="card-poster" alt=""{% if m and m.poster_url %} src="{{ m.poster_url }}"{% else %} hidden{% endif %}>
+  <h2 class="card-title">{{ m.title if m }}</h2>
+  <p class="card-meta"><span class="card-year">{{ m.year if m }}</span> · <span class="card-genres">{{ m.genres | join(", ") if m }}</span></p>
+  <p class="card-reason">{{ m.reason if m }}</p>
+  <div class="card-actions">
+    <button type="button" data-action="watch_tonight" aria-pressed="false">Watch tonight</button>
+    <button type="button" data-action="not_interested">Not interested</button>
+    <button type="button" data-action="already_seen">Already seen</button>
+  </div>
+  <p class="card-status" role="status"></p>
+</article>
+{%- endmacro %}
+{% block content %}
+<h1>Tonight's picks</h1>
+<p id="onboarding"{% if not recs.onboarding_prompt %} hidden{% endif %}>{{ recs.onboarding_prompt or "" }}</p>
+<section id="picks">
+{% for m in recs.items %}
+{{ card(m) }}
+{% endfor %}
+</section>
+<template id="card-template">{{ card(None) }}</template>
+
+<form id="chat-form">
+  <label for="chat-input">Ask for something different</label>
+  <input id="chat-input" name="message" maxlength="1000" required placeholder="something from the 90s">
+  <button type="submit">Send</button>
+</form>
+<p id="simple-notice" class="muted" hidden>{{ simple_mode_notice }}</p>
+<p id="chat-reply"></p>
+<p id="understood" class="muted"></p>
+<p id="chat-error" role="alert"></p>
+<button id="reset-tuning" type="button">Reset tuning</button>
+
+<section id="watch-tonight">
+  <h2>Saved for tonight</h2>
+  <p id="tonight-empty" class="muted"{% if tonight %} hidden{% endif %}>Nothing saved yet.</p>
+  <ul>
+  {% for m in tonight %}
+    <li data-movie-id="{{ m.movie_id }}">{{ m.title }}</li>
+  {% endfor %}
+  </ul>
+</section>
+{% endblock %}
+{% block script %}
+<script>
+  const ERRORS = {
+    403: "This page expired — reload and try again",
+    429: "Daily chat limit reached",
+  };
+  const errorText = (response) => ERRORS[response.status] ?? "Something went wrong";
+  const picks = document.getElementById("picks");
+
+  function renderCards(items) {
+    const template = document.getElementById("card-template");
+    picks.replaceChildren(...items.map((item) => {
+      const card = template.content.firstElementChild.cloneNode(true);
+      card.dataset.movieId = item.movie_id;
+      const poster = card.querySelector(".card-poster");
+      poster.src = item.poster_url;
+      poster.hidden = !item.poster_url;
+      card.querySelector(".card-title").textContent = item.title;
+      card.querySelector(".card-year").textContent = item.year;
+      card.querySelector(".card-genres").textContent = item.genres.join(", ");
+      card.querySelector(".card-reason").textContent = item.reason;
+      return card;
+    }));
+  }
+
+  function understoodText(intent) {
+    const parts = [];
+    for (const [genre, weight] of Object.entries(intent.genre_adjust)) {
+      parts.push(`${weight > 0 ? "more" : "less"} ${genre}`);
+    }
+    if (intent.mood_pace) parts.push(intent.mood_pace);
+    if (intent.era) parts.push(`from ${intent.era.from} to ${intent.era.to}`);
+    if (intent.runtime?.min != null) parts.push(`at least ${intent.runtime.min} minutes`);
+    if (intent.runtime?.max != null) parts.push(`at most ${intent.runtime.max} minutes`);
+    if (intent.language.length) parts.push(`in ${intent.language.join(" or ")}`);
+    if (intent.similar_to.length) parts.push(`like ${intent.similar_to.join(", ")}`);
+    if (intent.unlike.length) parts.push(`unlike ${intent.unlike.join(", ")}`);
+    const { require, exclude } = intent.hard_filters;
+    const only = [...require.genres, ...require.terms];
+    const no = [...exclude.genres, ...exclude.terms];
+    if (only.length) parts.push(`only ${only.join(", ")}`);
+    if (no.length) parts.push(`no ${no.join(", ")}`);
+    if (intent.reaction) {
+      parts.push(`you ${intent.reaction.liked ? "liked" : "did not like"} ${intent.reaction.title}`);
+    }
+    return parts.length ? parts.join("; ") : "nothing to change";
+  }
+
+  function saveForTonight(card) {
+    const list = document.querySelector("#watch-tonight ul");
+    const id = card.dataset.movieId;
+    if (!list.querySelector(`li[data-movie-id="${CSS.escape(id)}"]`)) {
+      const item = document.createElement("li");
+      item.dataset.movieId = id;
+      item.textContent = card.querySelector(".card-title").textContent;
+      list.append(item);
+    }
+    document.getElementById("tonight-empty").hidden = true;
+  }
+
+  picks.addEventListener("click", async (event) => {
+    const button = event.target.closest("button[data-action]");
+    if (!button) return;
+    const card = button.closest(".card");
+    const status = card.querySelector(".card-status");
+    const action = button.dataset.action;
+    status.textContent = "";
+    const response = await post("/feedback", { movie_id: Number(card.dataset.movieId), action });
+    if (!response.ok) {
+      status.textContent = errorText(response);
+    } else if (action === "watch_tonight") {
+      button.setAttribute("aria-pressed", "true");
+      button.textContent = "Saved for tonight";
+      saveForTonight(card);
+    } else {
+      card.querySelector(".card-actions").remove();
+      status.textContent = `Hidden: ${button.textContent}`;
+    }
+  });
+
+  document.getElementById("chat-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const input = document.getElementById("chat-input");
+    const error = document.getElementById("chat-error");
+    error.textContent = "";
+    const response = await post("/chat", { message: input.value });
+    if (!response.ok) {
+      error.textContent = errorText(response);
+      return;
+    }
+    const reply = await response.json();
+    renderCards(reply.items);
+    const onboarding = document.getElementById("onboarding");
+    onboarding.textContent = reply.onboarding_prompt ?? "";
+    onboarding.hidden = !reply.onboarding_prompt;
+    document.getElementById("simple-notice").hidden = reply.mode !== "simple";
+    document.getElementById("understood").textContent = `I understood: ${understoodText(reply.understood)}`;
+    document.getElementById("chat-reply").textContent = reply.reply;
+    input.value = "";
+  });
+
+  document.getElementById("reset-tuning").addEventListener("click", async () => {
+    const response = await post("/chat/reset");
+    if (response.ok) {
+      location.reload();
+    } else {
+      document.getElementById("chat-error").textContent = errorText(response);
+    }
+  });
+</script>
+{% endblock %}

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="csrf-token" content="{{ csrf_token }}">
+<title>{% block title %}moflix{% endblock %}</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0 auto;
+    max-width: 40rem;
+    padding: 1rem;
+    font-family: system-ui, sans-serif;
+    line-height: 1.4;
+    background: #111;
+    color: #eee;
+  }
+  h1 { font-size: 1.5rem; }
+  h2 { font-size: 1.2rem; }
+  img { max-width: 100%; }
+  button, input { font: inherit; min-height: 44px; }
+  input { width: 100%; padding: 0.5rem; margin-bottom: 0.75rem; }
+  button { padding: 0.5rem 1rem; border: 0; border-radius: 0.5rem; background: #e50914; color: #fff; }
+  button[aria-pressed="true"] { background: #2e7d32; }
+  label { display: block; margin-bottom: 0.25rem; }
+  [role="alert"] { color: #ff8a80; }
+  .card { background: #222; border-radius: 0.75rem; padding: 1rem; margin-bottom: 1rem; }
+  .card-title { margin: 0.5rem 0 0; }
+  .card-meta { color: #aaa; margin: 0.25rem 0; }
+  .card-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+  .muted { color: #aaa; }
+</style>
+</head>
+<body>
+{% block content %}{% endblock %}
+<script>
+  function post(path, body) {
+    return fetch(path, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRF-Token": document.querySelector('meta[name="csrf-token"]').content,
+      },
+      body: JSON.stringify(body ?? {}),
+    });
+  }
+</script>
+{% block script %}{% endblock %}
+</body>
+</html>

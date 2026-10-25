@@ -6,9 +6,16 @@ movies a user needs before picks stop leaning on popularity, and each user's dai
 cap from MOFLIX_CHAT_DAILY_CAP (default 50). `app.llm` documents the LLM settings.
 
 There is deliberately no sign-up route; accounts come only from `python -m app.cli add-user`.
+
+GET / serves the phone page. A state-changing request a browser sends (one carrying `Origin` or
+`Sec-Fetch-Site`, which browsers attach to every cross-site POST) must echo the `__Host-csrf`
+cookie that page sets in an `X-CSRF-Token` header, or it gets 403. Requests without those
+headers come from API clients that hold no ambient browser cookies, so they are not checked.
 """
 
+import hmac
 import os
+import secrets
 import sqlite3
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Sequence
@@ -17,6 +24,8 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import Cookie, Depends, FastAPI, HTTPException, Request, Response, status
+from fastapi.responses import JSONResponse
+from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
 from app import chat
@@ -61,6 +70,10 @@ from app.taste import WatchEvent
 from app.vectors import Movie
 
 SESSION_COOKIE = "session"
+CSRF_COOKIE = "__Host-csrf"
+CSRF_HEADER = "X-CSRF-Token"
+UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+TEMPLATES = Jinja2Templates(directory=Path(__file__).parent / "templates")
 ONBOARDING_PROMPT = (
     "New here? Tell us a few genres you like, such as Comedy, Science Fiction or Thriller,"
     " and we'll tailor these picks to you."
@@ -152,12 +165,28 @@ Db = Annotated[sqlite3.Connection, Depends(get_db)]
 SessionToken = Annotated[str | None, Cookie(alias=SESSION_COOKIE)]
 
 
-def current_user(request: Request, conn: Db, token: SessionToken = None) -> User:
+def optional_user(request: Request, conn: Db, token: SessionToken = None) -> User | None:
     user = session_user(conn, token, utc_now()) if token else None
+    if user is not None:
+        request.state.user_id = user.id
+    return user
+
+
+def current_user(user: Annotated[User | None, Depends(optional_user)]) -> User:
     if user is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "not logged in")
-    request.state.user_id = user.id
     return user
+
+
+def csrf_ok(request: Request) -> bool:
+    if request.method not in UNSAFE_METHODS:
+        return True
+    headers = request.headers
+    if "origin" not in headers and "sec-fetch-site" not in headers:
+        return True
+    cookie = request.cookies.get(CSRF_COOKIE, "")
+    header = headers.get(CSRF_HEADER, "")
+    return bool(cookie) and hmac.compare_digest(cookie.encode(), header.encode())
 
 
 def create_app(
@@ -249,6 +278,17 @@ def create_app(
     app = FastAPI(title="moflix-rec", lifespan=lifespan)
     app.state.db_path = db_path
 
+    # Added before log_request so that log_request stays outermost and logs the 403 too.
+    @app.middleware("http")
+    async def check_csrf(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        if not csrf_ok(request):
+            return JSONResponse(
+                {"detail": "missing or invalid CSRF token"}, status.HTTP_403_FORBIDDEN
+            )
+        return await call_next(request)
+
     @app.middleware("http")
     async def log_request(
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
@@ -276,6 +316,27 @@ def create_app(
             response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
             return Health(status="error", db="error")
         return Health(status="ok", db="ok")
+
+    @app.get("/", include_in_schema=False)
+    def home(
+        request: Request, conn: Db, user: Annotated[User | None, Depends(optional_user)]
+    ) -> Response:
+        csrf = request.cookies.get(CSRF_COOKIE) or secrets.token_urlsafe(32)
+        if user is None:
+            page = TEMPLATES.TemplateResponse(request, "login.html", {"csrf_token": csrf})
+        else:
+            page = TEMPLATES.TemplateResponse(
+                request,
+                "home.html",
+                {
+                    "csrf_token": csrf,
+                    "recs": recommendations(conn, user),
+                    "tonight": watch_tonight(conn, user),
+                    "simple_mode_notice": chat.SIMPLE_MODE_NOTICE,
+                },
+            )
+        page.set_cookie(CSRF_COOKIE, csrf, httponly=True, secure=True, samesite="strict")
+        return page
 
     @app.post("/auth/login")
     def login(credentials: Credentials, conn: Db, request: Request, response: Response) -> LoggedIn:
