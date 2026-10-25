@@ -1,236 +1,168 @@
-"""LLM provider via OpenRouter — intent parsing for chat tuning.
+"""The LLM provider abstraction that turns a chat message into intent JSON (PRD FR-19, FR-22, §7).
 
-OpenRouter exposes an OpenAI-compatible API. We use it to call Claude 3 Haiku,
-which is the cheapest model with strong instruction-following for JSON extraction.
+A provider only returns text. Validating it as an `Intent`, enforcing the deadline, falling
+back to `simple_parse` and recording usage all happen in `app.chat`, whatever the provider.
+
+The only provider is OpenRouter, an OpenAI-compatible gateway in front of Anthropic, OpenAI,
+Google, Meta and others, so `OPENROUTER_MODEL` picks both the upstream provider and the model.
 
 Environment variables:
-    OPENROUTER_API_KEY   required — your OpenRouter API key
-    OPENROUTER_MODEL     optional — default: anthropic/claude-3-haiku
-    MOFLIX_MONTHLY_CAP   optional — USD spend cap, default 5.0
+    OPENROUTER_API_KEY   the API key; without it chat runs in simple mode only
+    OPENROUTER_MODEL     optional, one of MODEL_PRICES, default anthropic/claude-3-haiku
+    MOFLIX_MONTHLY_CAP   optional USD spend cap per calendar month, default 5.0
 
-Cost tracking is DB-backed (llm_usage table). The monthly cap is checked before
-every call; if the current month's spend would exceed it the call is refused and
-the caller falls back to simple_parse. Costs are estimated from token counts
-returned by the API — they are a close approximation, not exact billing figures.
+Costs are estimated from the token counts the API returns at the model's list price in
+`MODEL_PRICES`: close approximations, not billing figures. A model without a price there is
+refused, since the monthly cap could not hold for it.
 """
-
-from __future__ import annotations
 
 import json
 import os
 import sqlite3
-from datetime import datetime, timezone
-from typing import Any
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Literal, Protocol
+
+from pydantic import BaseModel
 
 from app.intent import Intent
-from app.simple_parse import simple_parse
-
-# ---------------------------------------------------------------------------
-# Config
-# ---------------------------------------------------------------------------
 
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 DEFAULT_MODEL = "anthropic/claude-3-haiku"
-# Approximate cost per token in USD (Claude 3 Haiku on OpenRouter)
-COST_PER_INPUT_TOKEN = 0.25 / 1_000_000
-COST_PER_OUTPUT_TOKEN = 1.25 / 1_000_000
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS llm_usage (
-    id INTEGER PRIMARY KEY,
-    called_at TEXT NOT NULL,
-    model TEXT NOT NULL,
-    input_tokens INTEGER NOT NULL,
-    output_tokens INTEGER NOT NULL,
-    cost_usd REAL NOT NULL,
-    user_id INTEGER REFERENCES users(id)
-);
-CREATE INDEX IF NOT EXISTS llm_usage_month ON llm_usage(called_at);
-"""
-
-SYSTEM_PROMPT = """\
-You are a movie recommendation assistant. Parse the user's message and return ONLY a \
-JSON object matching the Intent schema. Do not explain. Do not add fields not in the schema.
-
-Intent schema (all fields optional, omit rather than null):
-{
-  "genre_adjust": {"<GenreName>": <float -1.0 to 1.0>},
-  "era": {"start": <year int>, "end": <year int>},
-  "runtime": {"min": <minutes int>, "max": <minutes int>},
-  "language": ["<iso-639-1 code>"],
-  "mood_pace": "<slow|medium|fast>",
-  "similar_to": ["<movie title>"],
-  "unlike": ["<movie title>"],
-  "hard_filters": {
-    "exclude": {"genres": ["<genre>"], "terms": ["<keyword>"]},
-    "require": {"genres": ["<genre>"], "terms": ["<keyword>"]}
-  },
-  "reaction": {"movie_id": <int>, "sentiment": "<liked|disliked|already_seen>"}
+DEFAULT_MONTHLY_CAP_USD = 5.0
+# USD per million (input, output) tokens, as listed on https://openrouter.ai/models.
+MODEL_PRICES = {
+    "anthropic/claude-3-haiku": (0.25, 1.25),
+    "anthropic/claude-3.5-haiku": (0.80, 4.00),
+    "anthropic/claude-haiku-4.5": (1.00, 5.00),
 }
 
-Valid genres: Action, Adventure, Animation, Comedy, Crime, Documentary, Drama, Family, \
-Fantasy, History, Horror, Music, Mystery, Romance, Science Fiction, Thriller, War, Western.
+SYSTEM_PROMPT = f"""\
+You turn a movie-night chat message into a JSON object that matches this JSON Schema. \
+Reply with that object only: no prose, no code fences. Omit a field rather than setting it \
+to null, and include only what the user asked for in their latest message.
+
+{json.dumps(Intent.model_json_schema(by_alias=True))}
 """
 
 
-# ---------------------------------------------------------------------------
-# DB helpers
-# ---------------------------------------------------------------------------
+class Turn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
 
 
-def ensure_schema(conn: sqlite3.Connection) -> None:
-    conn.executescript(SCHEMA)
+class Pick(BaseModel):
+    title: str
+    year: int
+    genres: list[str]
 
 
-def monthly_spend(conn: sqlite3.Connection) -> float:
-    month = datetime.now(timezone.utc).strftime("%Y-%m")
-    row = conn.execute(
-        "SELECT COALESCE(SUM(cost_usd), 0) FROM llm_usage WHERE called_at LIKE ?",
-        (f"{month}%",),
-    ).fetchone()
-    return float(row[0])
+class IntentRequest(BaseModel):
+    """Everything a provider is given: never vectors, watch history or other users' data."""
+
+    message: str
+    turns: list[Turn]  # the most recent messages of this user's own chat session, oldest first
+    picks: list[Pick]  # what the user is looking at now
 
 
-def record_usage(
-    conn: sqlite3.Connection,
-    model: str,
-    input_tokens: int,
-    output_tokens: int,
-    user_id: int | None,
-) -> float:
-    cost = input_tokens * COST_PER_INPUT_TOKEN + output_tokens * COST_PER_OUTPUT_TOKEN
-    now = datetime.now(timezone.utc).isoformat()
-    with conn:
-        conn.execute(
-            "INSERT INTO llm_usage"
-            " (called_at, model, input_tokens, output_tokens, cost_usd, user_id)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            (now, model, input_tokens, output_tokens, cost, user_id),
-        )
-    return cost
+@dataclass(frozen=True)
+class Completion:
+    text: str
+    model: str
+    input_tokens: int
+    output_tokens: int
+    cost_usd: float
 
 
-# ---------------------------------------------------------------------------
-# Intent parsing
-# ---------------------------------------------------------------------------
+class LLMProvider(Protocol):
+    def complete(self, request: IntentRequest) -> Completion:
+        """The intent JSON for the request, as text; raises on any provider failure."""
+        ...
 
 
-def parse_intent(
-    message: str,
-    recent_turns: list[dict[str, str]],
-    current_picks: list[dict[str, Any]],
-    conn: sqlite3.Connection,
-    user_id: int | None = None,
-) -> tuple[Intent, str, bool]:
-    """Parse a chat message into an Intent using the LLM, with fallback to simple_parse.
-
-    Returns (intent, reply_text, used_llm).
-    reply_text is the assistant's natural-language reply to show the user.
-    used_llm is False when the fallback parser was used.
-    """
-    ensure_schema(conn)
-
-    api_key = os.environ.get("OPENROUTER_API_KEY", "")
-    model = os.environ.get("OPENROUTER_MODEL", DEFAULT_MODEL)
-    cap = float(os.environ.get("MOFLIX_MONTHLY_CAP", "5.0"))
-
-    if not api_key:
-        intent = simple_parse(message)
-        return intent, _fallback_reply(intent), False
-
-    # Check monthly cap before calling
-    if monthly_spend(conn) >= cap:
-        intent = simple_parse(message)
-        return intent, _fallback_reply(intent, over_budget=True), False
-
-    try:
+class OpenRouterProvider:
+    def __init__(self, api_key: str, model: str = DEFAULT_MODEL, *, timeout_s: float) -> None:
         from openai import OpenAI
 
-        client = OpenAI(
+        if model not in MODEL_PRICES:
+            raise ValueError(f"No price is known for model {model!r}; add it to MODEL_PRICES")
+        self.model = model
+        # The turn stops waiting at its own deadline; this bounds how long the abandoned call
+        # keeps a provider thread busy.
+        self._client = OpenAI(
             api_key=api_key,
             base_url=OPENROUTER_BASE,
+            timeout=timeout_s,
+            max_retries=0,
             default_headers={
                 "HTTP-Referer": "https://github.com/arunkumar2k5/moflix-rec",
                 "X-Title": "Moflix",
             },
         )
 
-        picks_context = ", ".join(p.get("title", "") for p in current_picks[:5])
-        user_context = f"Current picks shown: {picks_context}." if picks_context else ""
-
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-        for turn in recent_turns[-4:]:  # last 4 turns for context
-            messages.append(turn)
-        messages.append(
-            {
-                "role": "user",
-                "content": f"{user_context}\n\nUser message: {message}",
-            }
-        )
-
-        response = client.chat.completions.create(
-            model=model,
-            messages=messages,
+    def complete(self, request: IntentRequest) -> Completion:
+        picks = "; ".join(f"{p.title} ({p.year}, {', '.join(p.genres)})" for p in request.picks)
+        response = self._client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                *({"role": turn.role, "content": turn.content} for turn in request.turns),
+                {
+                    "role": "user",
+                    "content": f"Current picks: {picks or 'none'}\n\nMessage: {request.message}",
+                },
+            ],
             max_tokens=512,
             temperature=0.1,
             response_format={"type": "json_object"},
         )
-
         usage = response.usage
-        record_usage(
-            conn,
-            model,
-            usage.prompt_tokens if usage else 0,
-            usage.completion_tokens if usage else 0,
-            user_id,
+        input_tokens = usage.prompt_tokens if usage else 0
+        output_tokens = usage.completion_tokens if usage else 0
+        input_price, output_price = MODEL_PRICES[self.model]
+        return Completion(
+            text=response.choices[0].message.content or "",
+            model=self.model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cost_usd=(input_tokens * input_price + output_tokens * output_price) / 1_000_000,
         )
 
-        raw = response.choices[0].message.content or "{}"
-        intent = Intent.model_validate(json.loads(raw))
-        reply = _build_reply(intent, message)
-        return intent, reply, True
 
-    except Exception:
-        intent = simple_parse(message)
-        return intent, _fallback_reply(intent), False
-
-
-def _build_reply(intent: Intent, original: str) -> str:
-    """Build a short natural-language confirmation of what was understood."""
-    parts = []
-    if intent.genre_adjust:
-        more = [g for g, v in intent.genre_adjust.items() if v > 0]
-        less = [g for g, v in intent.genre_adjust.items() if v < 0]
-        if more:
-            parts.append(f"more {', '.join(more)}")
-        if less:
-            parts.append(f"less {', '.join(less)}")
-    if intent.era:
-        parts.append(f"{intent.era.start}s–{intent.era.end}s")
-    if intent.runtime and intent.runtime.max:
-        parts.append(f"under {intent.runtime.max} min")
-    if intent.similar_to:
-        parts.append(f"similar to {', '.join(intent.similar_to)}")
-    if intent.hard_filters and intent.hard_filters.exclude.terms:
-        parts.append(f"no {', '.join(intent.hard_filters.exclude.terms)}")
-    if not parts:
-        return "Got it — refreshing your picks."
-    return f"Got it: {', '.join(parts)}. Refreshing your picks."
-
-
-def _fallback_reply(intent: Intent, over_budget: bool = False) -> str:
-    prefix = (
-        "AI is unavailable, using simple mode. "
-        if not over_budget
-        else "Monthly AI budget reached, using simple mode. "
+def provider_from_env(timeout_s: float) -> LLMProvider | None:
+    api_key = os.environ.get("OPENROUTER_API_KEY", "")
+    if not api_key:
+        return None
+    return OpenRouterProvider(
+        api_key, os.environ.get("OPENROUTER_MODEL", DEFAULT_MODEL), timeout_s=timeout_s
     )
-    parts = []
-    if intent.genre_adjust:
-        parts.append("genre adjusted")
-    if intent.era:
-        parts.append(f"{intent.era.start}s–{intent.era.end}s")
-    if intent.runtime and intent.runtime.max:
-        parts.append(f"under {intent.runtime.max} min")
-    if not parts:
-        return prefix + "Refreshing your picks."
-    return prefix + f"I understood: {', '.join(parts)}."
+
+
+def monthly_cap_from_env() -> float:
+    return float(os.environ.get("MOFLIX_MONTHLY_CAP", str(DEFAULT_MONTHLY_CAP_USD)))
+
+
+def monthly_spend(conn: sqlite3.Connection, now: datetime) -> float:
+    row = conn.execute(
+        "SELECT TOTAL(cost_usd) FROM llm_usage WHERE called_at LIKE ?",
+        (f"{now:%Y-%m}%",),
+    ).fetchone()
+    return float(row[0])
+
+
+def record_usage(
+    conn: sqlite3.Connection, completion: Completion, user_id: int, now: datetime
+) -> None:
+    conn.execute(
+        "INSERT INTO llm_usage"
+        " (called_at, model, input_tokens, output_tokens, cost_usd, user_id)"
+        " VALUES (?, ?, ?, ?, ?, ?)",
+        (
+            now.isoformat(),
+            completion.model,
+            completion.input_tokens,
+            completion.output_tokens,
+            completion.cost_usd,
+            user_id,
+        ),
+    )

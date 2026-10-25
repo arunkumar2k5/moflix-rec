@@ -1,5 +1,5 @@
-"""SQLite storage for users, sessions, movies, vectors, watch history, taste vectors, picks and
-feedback on them."""
+"""SQLite storage for users, sessions, movies, vectors, watch history, taste vectors, picks,
+feedback on them, chat sessions and LLM usage."""
 
 import json
 import sqlite3
@@ -87,6 +87,37 @@ CREATE TABLE IF NOT EXISTS feedback_events (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS feedback_events_user ON feedback_events(user_id);
+CREATE INDEX IF NOT EXISTS recommendation_log_user ON recommendation_log(user_id, shown_at);
+CREATE TABLE IF NOT EXISTS chat_sessions (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    started_at TEXT NOT NULL,
+    ended_at TEXT,
+    vector_version INTEGER NOT NULL,
+    dimension INTEGER NOT NULL,
+    session_vector BLOB NOT NULL,
+    constraints TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS chat_sessions_active ON chat_sessions(user_id)
+    WHERE ended_at IS NULL;
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id INTEGER PRIMARY KEY,
+    session_id INTEGER NOT NULL REFERENCES chat_sessions(id),
+    role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+    content TEXT NOT NULL,
+    sent_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS chat_messages_session ON chat_messages(session_id, id);
+CREATE TABLE IF NOT EXISTS llm_usage (
+    id INTEGER PRIMARY KEY,
+    called_at TEXT NOT NULL,
+    model TEXT NOT NULL,
+    input_tokens INTEGER NOT NULL,
+    output_tokens INTEGER NOT NULL,
+    cost_usd REAL NOT NULL,
+    user_id INTEGER REFERENCES users(id)
+);
+CREATE INDEX IF NOT EXISTS llm_usage_month ON llm_usage(called_at);
 """
 
 # Taste signals on watch_events, added in place so databases created before them keep their
